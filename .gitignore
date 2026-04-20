@@ -1,4 +1,6 @@
 /.agent-shell/
+/.xcodebuild/
 .build/
 .swiftpm/
 .tmp_npm/
+/dist/
