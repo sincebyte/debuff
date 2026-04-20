@@ -1,0 +1,4 @@
+/.agent-shell/
+.build/
+.swiftpm/
+.tmp_npm/
