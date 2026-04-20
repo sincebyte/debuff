@@ -6,17 +6,47 @@ struct MainSettingsView: View {
     @EnvironmentObject private var monitor: SedentaryMonitor
     @EnvironmentObject private var panelBridge: DebuffPanelBridge
 
+    /// 未保存的编辑：仅「保存」后写入 monitor
+    @State private var draftThresholdMinutes: Double = 45
+    @State private var draftCustomIconPath: String?
+
+    @State private var statusClock = Date()
+    @State private var thresholdText = ""
+    @FocusState private var thresholdFieldFocused: Bool
+
+    private var hasUnsavedChanges: Bool {
+        Self.clampThresholdMinutes(draftThresholdMinutes) != Self.clampThresholdMinutes(monitor.thresholdMinutes)
+            || draftCustomIconPath != monitor.customIconPath
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: 6) {
             Text("Debuff")
                 .font(.title2.weight(.semibold))
 
+            Text("阈值与图标在下方修改后，需点击「保存」才会应用到计时与 debuff 浮窗。")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
             GroupBox("出现 debuff 前的久坐时间") {
-                HStack {
-                    Slider(value: $monitor.thresholdMinutes, in: 0.1...240, step: 0.1)
-                    Text(String(format: "%.1f 分钟", monitor.thresholdMinutes))
-                        .monospacedDigit()
-                        .frame(minWidth: 100, maxHeight: 100, alignment: .trailing)
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(spacing: 8) {
+                        Slider(value: $draftThresholdMinutes, in: 0.1...240, step: 0.1)
+                        TextField("分钟", text: $thresholdText)
+                            .focused($thresholdFieldFocused)
+                            .labelsHidden()
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 72)
+                            .multilineTextAlignment(.trailing)
+                            .monospacedDigit()
+                            .onSubmit { commitThresholdInput() }
+                        Text("分钟")
+                            .foregroundStyle(.secondary)
+                    }
+                    Text("约 0.1～240 分钟；改完后点「保存」生效。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
                 .padding(4)
             }
@@ -27,13 +57,13 @@ struct MainSettingsView: View {
                         Button("选择图片…") {
                             pickIcon()
                         }
-                        if monitor.customIconPath != nil {
+                        if draftCustomIconPath != nil {
                             Button("恢复默认") {
-                                monitor.customIconPath = nil
+                                draftCustomIconPath = nil
                             }
                         }
                     }
-                    if let p = monitor.customIconPath {
+                    if let p = draftCustomIconPath {
                         Text(p)
                             .font(.caption)
                             .foregroundStyle(.secondary)
@@ -43,29 +73,99 @@ struct MainSettingsView: View {
                 .padding(4)
             }
 
-            GroupBox("状态") {
+            GroupBox("状态（已保存配置）") {
                 VStack(alignment: .leading, spacing: 6) {
+                    let sitMin = statusClock.timeIntervalSince(monitor.sessionStart) / 60
                     LabeledContent("当前久坐") {
-                        Text(String(format: "%.1f 分钟", monitor.sitElapsed / 60))
+                        Text(String(format: "%.1f 分钟", sitMin))
                             .monospacedDigit()
                     }
                     LabeledContent("Debuff") {
-                        Text(monitor.showDebuff ? "显示中" : "未触发")
+                        Text(Self.showDebuff(at: statusClock, monitor: monitor) ? "显示中" : "未触发")
+                    }
+                    LabeledContent("已保存阈值") {
+                        Text(String(format: "%.1f 分钟", monitor.thresholdMinutes))
+                            .monospacedDigit()
                     }
                 }
                 .padding(4)
             }
 
             Spacer(minLength: 0)
+
+            HStack {
+                Spacer(minLength: 0)
+                Button("保存") {
+                    applySavedConfiguration()
+                }
+                .keyboardShortcut("s", modifiers: .command)
+                .buttonStyle(.borderedProminent)
+                .disabled(!hasUnsavedChanges)
+            }
         }
-        .padding(16)
         .frame(maxWidth: .infinity, maxHeight: 400, alignment: .topLeading)
+        .onReceive(Timer.publish(every: 0.5, on: .main, in: .common).autoconnect()) { date in
+            statusClock = date
+        }
+        .onAppear {
+            loadDraftFromMonitor()
+            panelBridge.sync()
+        }
+        .onChange(of: draftThresholdMinutes) { newValue in
+            if !thresholdFieldFocused {
+                thresholdText = Self.formatMinutes(newValue)
+            }
+        }
+        .onChange(of: thresholdFieldFocused) { focused in
+            if !focused {
+                commitThresholdInput()
+            }
+        }
         .onChange(of: monitor.debuffVisible) { _ in
             panelBridge.sync()
         }
-        .onAppear {
-            panelBridge.sync()
+    }
+
+    private func loadDraftFromMonitor() {
+        draftThresholdMinutes = monitor.thresholdMinutes
+        draftCustomIconPath = monitor.customIconPath
+        syncThresholdTextFromDraft()
+    }
+
+    private func applySavedConfiguration() {
+        let t = Self.clampThresholdMinutes(draftThresholdMinutes)
+        draftThresholdMinutes = t
+        monitor.thresholdMinutes = t
+        monitor.customIconPath = draftCustomIconPath
+        syncThresholdTextFromDraft()
+        panelBridge.sync()
+    }
+
+    private func syncThresholdTextFromDraft() {
+        thresholdText = Self.formatMinutes(draftThresholdMinutes)
+    }
+
+    private func commitThresholdInput() {
+        let normalized = thresholdText.replacingOccurrences(of: ",", with: ".")
+        guard let v = Double(normalized) else {
+            syncThresholdTextFromDraft()
+            return
         }
+        draftThresholdMinutes = Self.clampThresholdMinutes(v)
+        syncThresholdTextFromDraft()
+    }
+
+    private static func formatMinutes(_ value: Double) -> String {
+        String(format: "%.1f", value)
+    }
+
+    static func clampThresholdMinutes(_ value: Double) -> Double {
+        let clamped = min(240, max(0.1, value))
+        return (clamped * 10).rounded() / 10
+    }
+
+    private static func showDebuff(at date: Date, monitor: SedentaryMonitor) -> Bool {
+        date.timeIntervalSince(monitor.sessionStart) >= monitor.thresholdSeconds
     }
 
     private func pickIcon() {
@@ -76,7 +176,7 @@ struct MainSettingsView: View {
         panel.canChooseDirectories = false
         panel.title = "选择 Debuff 图标"
         if panel.runModal() == .OK, let url = panel.url {
-            monitor.customIconPath = url.path
+            draftCustomIconPath = url.path
         }
     }
 }

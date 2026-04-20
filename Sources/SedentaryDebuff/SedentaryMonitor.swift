@@ -40,7 +40,10 @@ final class SedentaryMonitor: ObservableObject {
                 guard let self else { return }
                 self.syncDebuffAnchorIfNeeded()
                 self.debuffVisible = self.showDebuff
-                self.tick &+= 1
+                // 仅在 debuff 显示时递增 tick，避免设置页每 0.25s 整页刷新打断数值输入
+                if self.showDebuff {
+                    self.tick &+= 1
+                }
             }
     }
 
