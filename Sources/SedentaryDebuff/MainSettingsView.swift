@@ -8,15 +8,8 @@ struct MainSettingsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("久坐 Debuff")
+            Text("Debuff")
                 .font(.title2.weight(.semibold))
-
-            Text(
-                "在本窗口调节阈值与图标。计时从启动或清除 debuff 后开始；超时后出现 debuff 浮窗（border.png 外框 + 图标）。图标下方为进入 debuff 后的累计分钟（一位小数 + m）。双击浮窗可清除并重新计时。"
-            )
-            .font(.callout)
-            .foregroundStyle(.secondary)
-            .fixedSize(horizontal: false, vertical: true)
 
             GroupBox("出现 debuff 前的久坐时间") {
                 HStack {
