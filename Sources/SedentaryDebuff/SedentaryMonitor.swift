@@ -4,10 +4,9 @@ import Foundation
 /// 久坐会话：从启动或清除 debuff 后重新计时；超过阈值进入 debuff，双击清除后重置。
 final class SedentaryMonitor: ObservableObject {
     @Published private(set) var sessionStart: Date
-    @Published private(set) var debuffAnchor: Date?
     /// 供界面 `onChange` 监听 debuff 显示/隐藏（计算属性 `showDebuff` 无法触发 `onChange`）
     @Published private(set) var debuffVisible: Bool = false
-    /// 定时递增，驱动 debuff 时长等 UI 刷新（久坐进行中时 `debuffVisible` 可能不变）
+    /// 定时递增，驱动 HUD 久坐分钟数等 UI 刷新（久坐进行中时 `debuffVisible` 可能不变）
     @Published private(set) var tick: UInt64 = 0
 
     @Published var thresholdMinutes: Double {
@@ -28,7 +27,6 @@ final class SedentaryMonitor: ObservableObject {
         thresholdMinutes = def.object(forKey: Self.thresholdKey) as? Double ?? 45
         customIconPath = def.string(forKey: Self.iconPathKey)
         sessionStart = Date()
-        debuffAnchor = nil
         debuffVisible = showDebuff
         startTicker()
     }
@@ -38,7 +36,6 @@ final class SedentaryMonitor: ObservableObject {
             .autoconnect()
             .sink { [weak self] _ in
                 guard let self else { return }
-                self.syncDebuffAnchorIfNeeded()
                 self.debuffVisible = self.showDebuff
                 // 仅在 debuff 显示时递增 tick，避免设置页每 0.25s 整页刷新打断数值输入
                 if self.showDebuff {
@@ -61,32 +58,14 @@ final class SedentaryMonitor: ObservableObject {
         sitElapsed >= thresholdSeconds
     }
 
-    /// debuff 开始时刻（久坐刚达阈值的时刻）
-    private var computedDebuffStart: Date {
-        sessionStart.addingTimeInterval(thresholdSeconds)
-    }
-
-    /// 用于展示的 debuff 持续分钟数（自进入 debuff 起算）
+    /// HUD 展示用：本次会话久坐总时长（分钟），自 `sessionStart` 起算
     var debuffMinutesForDisplay: Double {
         guard showDebuff else { return 0 }
-        let start = debuffAnchor ?? computedDebuffStart
-        return Date().timeIntervalSince(start) / 60
-    }
-
-    /// 同步 debuff 锚点：首次进入 debuff 时固定起点，避免阈值改动导致显示跳变
-    func syncDebuffAnchorIfNeeded() {
-        if showDebuff {
-            if debuffAnchor == nil {
-                debuffAnchor = computedDebuffStart
-            }
-        } else {
-            debuffAnchor = nil
-        }
+        return sitElapsed / 60
     }
 
     /// 双击：清除 debuff，从当前时刻重新计时
     func clearDebuffAndRestart() {
         sessionStart = Date()
-        debuffAnchor = nil
     }
 }

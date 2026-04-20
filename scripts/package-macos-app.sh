@@ -34,6 +34,30 @@ cp "$ROOT/App/ResourceBundle-Info.plist" \
 
 cp "$ROOT/App/Info.plist" "$APP_PATH/Contents/Info.plist"
 
+echo "==> AppIcon.icns（与包内默认 debuff 图同源：sentinel-juggernautstance-128.png）"
+DEFAULT_ICON_SRC="$ROOT/Sources/SedentaryDebuff/Resources/sentinel-juggernautstance-128.png"
+if [[ ! -f "$DEFAULT_ICON_SRC" ]]; then
+	echo "error: missing default icon png: $DEFAULT_ICON_SRC" >&2
+	exit 1
+fi
+ICON_TMP="$(mktemp -d "${TMPDIR:-/tmp}/sedentarydebuff-icon.XXXXXX")"
+trap 'rm -rf "$ICON_TMP"' EXIT
+ICONSET="$ICON_TMP/AppIcon.iconset"
+mkdir -p "$ICONSET"
+sips -z 16 16 "$DEFAULT_ICON_SRC" --out "$ICONSET/icon_16x16.png" >/dev/null
+sips -z 32 32 "$DEFAULT_ICON_SRC" --out "$ICONSET/icon_16x16@2x.png" >/dev/null
+sips -z 32 32 "$DEFAULT_ICON_SRC" --out "$ICONSET/icon_32x32.png" >/dev/null
+sips -z 64 64 "$DEFAULT_ICON_SRC" --out "$ICONSET/icon_32x32@2x.png" >/dev/null
+sips -z 128 128 "$DEFAULT_ICON_SRC" --out "$ICONSET/icon_128x128.png" >/dev/null
+sips -z 256 256 "$DEFAULT_ICON_SRC" --out "$ICONSET/icon_128x128@2x.png" >/dev/null
+sips -z 256 256 "$DEFAULT_ICON_SRC" --out "$ICONSET/icon_256x256.png" >/dev/null
+sips -z 512 512 "$DEFAULT_ICON_SRC" --out "$ICONSET/icon_256x256@2x.png" >/dev/null
+sips -z 512 512 "$DEFAULT_ICON_SRC" --out "$ICONSET/icon_512x512.png" >/dev/null
+sips -z 1024 1024 "$DEFAULT_ICON_SRC" --out "$ICONSET/icon_512x512@2x.png" >/dev/null
+iconutil -c icns "$ICONSET" -o "$ICON_TMP/AppIcon.icns"
+mkdir -p "$APP_PATH/Contents/Resources"
+cp "$ICON_TMP/AppIcon.icns" "$APP_PATH/Contents/Resources/AppIcon.icns"
+
 echo "==> ad-hoc codesign"
 if command -v codesign >/dev/null 2>&1; then
 	INNER="$APP_PATH/Contents/MacOS/SedentaryDebuff_SedentaryDebuff.bundle"
