@@ -32,12 +32,11 @@ struct MainSettingsView: View {
             GroupBox("出现 debuff 前的久坐时间") {
                 VStack(alignment: .leading, spacing: 8) {
                     HStack(spacing: 8) {
-                        Slider(value: $draftThresholdMinutes, in: 0.1...240, step: 0.1)
                         TextField("分钟", text: $thresholdText)
                             .focused($thresholdFieldFocused)
                             .labelsHidden()
                             .textFieldStyle(.roundedBorder)
-                            .frame(width: 72)
+                            .frame(width: 96)
                             .multilineTextAlignment(.trailing)
                             .monospacedDigit()
                             .onSubmit { commitThresholdInput() }
@@ -91,8 +90,6 @@ struct MainSettingsView: View {
                 .padding(4)
             }
 
-            Spacer(minLength: 0)
-
             HStack {
                 Spacer(minLength: 0)
                 Button("保存") {
@@ -103,7 +100,7 @@ struct MainSettingsView: View {
                 .disabled(!hasUnsavedChanges)
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: 400, alignment: .topLeading)
+        .frame(maxWidth: .infinity, alignment: .topLeading)
         .onReceive(Timer.publish(every: 0.5, on: .main, in: .common).autoconnect()) { date in
             statusClock = date
         }
