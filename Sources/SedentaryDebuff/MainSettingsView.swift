@@ -81,15 +81,12 @@ struct MainSettingsView: View {
                 }
             }
 
-            HStack {
-                Spacer(minLength: 0)
-                Button("保存") {
-                    applySavedConfiguration()
-                }
-                .keyboardShortcut("s", modifiers: .command)
-                .buttonStyle(.borderedProminent)
-                .disabled(!hasUnsavedChanges)
+            Button("保存") {
+                applySavedConfiguration()
             }
+            .frame(maxWidth: .infinity)
+            .buttonStyle(.borderedProminent)
+            .disabled(!hasUnsavedChanges)
         }
         .frame(maxWidth: .infinity, alignment: .topLeading)
         .onReceive(Timer.publish(every: 0.5, on: .main, in: .common).autoconnect()) { date in
