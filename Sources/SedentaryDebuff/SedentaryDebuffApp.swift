@@ -9,7 +9,7 @@ struct SedentaryDebuffApp: App {
             MainSettingsView()
                 .environmentObject(services.monitor)
                 .environmentObject(services.panelBridge)
-                .frame(minWidth: 520, idealWidth: 520, minHeight: 420, idealHeight: 420)
+                .frame(minWidth: 520, idealWidth: 520, minHeight: 480, idealHeight: 480)
         }
         .defaultSize(width: 520, height: 420)
         .windowResizability(.contentSize)
