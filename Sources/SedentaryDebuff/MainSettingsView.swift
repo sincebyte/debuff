@@ -94,6 +94,7 @@ struct MainSettingsView: View {
             .padding(.top, 8)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(MainSettingsWindowCloseBehavior())
         .onAppear {
             loadDraftFromMonitor()
             panelBridge.sync()
@@ -166,6 +167,37 @@ struct MainSettingsView: View {
         panel.title = "选择 Debuff 图标"
         if panel.runModal() == .OK, let url = panel.url {
             draftCustomIconPath = url.path
+        }
+    }
+}
+
+/// 拦截左上角关闭：仅隐藏主设置窗口，避免 SwiftUI 把该窗口当作「关闭」而结束应用。
+private struct MainSettingsWindowCloseBehavior: NSViewRepresentable {
+    final class Delegate: NSObject, NSWindowDelegate {
+        func windowShouldClose(_ sender: NSWindow) -> Bool {
+            sender.orderOut(nil)
+            return false
+        }
+    }
+
+    func makeCoordinator() -> Delegate {
+        Delegate()
+    }
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        attachIfNeeded(view: view, delegate: context.coordinator)
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        attachIfNeeded(view: nsView, delegate: context.coordinator)
+    }
+
+    private func attachIfNeeded(view: NSView, delegate: Delegate) {
+        DispatchQueue.main.async {
+            guard let window = view.window else { return }
+            window.delegate = delegate
         }
     }
 }

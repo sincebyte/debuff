@@ -2,6 +2,7 @@ import SwiftUI
 
 @main
 struct SedentaryDebuffApp: App {
+    @NSApplicationDelegateAdaptor(SedentaryDebuffAppDelegate.self) private var appDelegate
     @StateObject private var services = AppServices()
 
     var body: some Scene {
