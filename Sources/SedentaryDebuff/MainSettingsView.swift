@@ -30,7 +30,7 @@ struct MainSettingsView: View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 0) {
                 SettingsSectionBlock(title: "久坐阈值", titleBarFill: Color.accentColor.opacity(0.14)) {
-                    HStack(spacing: 8) {
+                    HStack(spacing: 0) {
                         TextField("分钟", text: $thresholdText)
                             .focused($thresholdFieldFocused)
                             .labelsHidden()
@@ -93,7 +93,7 @@ struct MainSettingsView: View {
             .disabled(!hasUnsavedChanges)
             .padding(.top, 8)
         }
-        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .onAppear {
             loadDraftFromMonitor()
             panelBridge.sync()

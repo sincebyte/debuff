@@ -45,7 +45,7 @@ struct DebuffHUDView: View {
         return String(format: "%.1fm", m)
     }
 
-    private static let minutesFont = Font.system(size: 14, weight: .semibold, design: .rounded)
+    private static let minutesFont = Font.system(size: 14, weight: .thin, design: .serif)
     private static let minutesFill = Color(red: 0.95, green: 0.85, blue: 0.45)
     private static let minutesStrokeOffsets: [(CGFloat, CGFloat)] = [
         (-1, 0), (1, 0), (0, -1), (0, 1),

@@ -1,4 +1,4 @@
-# SedentaryDebuff（久坐 Debuff）
+# debuff（久坐计时）
 
 macOS 原生小工具：启动后出现**设置窗口**，可在其中调节久坐阈值与 debuff 图标。计时从启动或清除 debuff 后开始；超过阈值后出现仿魔兽风格的 **debuff 浮窗**：外框使用资源 **`border.png`**，技能图默认使用 **`sentinel-juggernautstance-128.png`**（可被用户自选图片覆盖）。图标下方为计时（分钟，一位小数 + `m`）。**双击** debuff 浮窗可清除状态并重新计时。
 
@@ -91,10 +91,10 @@ open .xcodebuild/DerivedData/Build/Products/Release/SedentaryDebuff
 ./scripts/package-macos-app.sh
 ```
 
-成功后得到 `dist/SedentaryDebuff.app`（`dist/` 已加入 `.gitignore`）。安装示例：
+成功后得到 `dist/debuff.app`（`dist/` 已加入 `.gitignore`）。安装示例：
 
 ```bash
-cp -R dist/SedentaryDebuff.app /Applications/
+cp -R dist/debuff.app /Applications/
 ```
 
 脚本会 `swift build -c release`，将可执行文件与 SPM 资源包放入 `Contents/MacOS/`，并写入 `App/Info.plist`；为资源包补全 `App/ResourceBundle-Info.plist` 以便 **ad-hoc 代码签名**（`codesign -s -`）。若需对外分发并通过 Gatekeeper，仍需在 Xcode 中 **Archive** 或使用 Apple 开发者账号做公证（Notarization）。

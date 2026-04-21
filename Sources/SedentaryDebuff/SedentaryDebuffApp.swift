@@ -5,7 +5,7 @@ struct SedentaryDebuffApp: App {
     @StateObject private var services = AppServices()
 
     var body: some Scene {
-        Window("Debuff", id: "settings") {
+        Window("debuff", id: "settings") {
             MainSettingsView()
                 .environmentObject(services.monitor)
                 .environmentObject(services.panelBridge)

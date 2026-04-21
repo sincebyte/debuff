@@ -12,8 +12,10 @@
 	<string>app.sedentarydebuff</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
+	<key>CFBundleDisplayName</key>
+	<string>debuff</string>
 	<key>CFBundleName</key>
-	<string>SedentaryDebuff</string>
+	<string>debuff</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
