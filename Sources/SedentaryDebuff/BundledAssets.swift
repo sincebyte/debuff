@@ -23,4 +23,25 @@ enum BundledAssets {
         }
         return NSImage(size: NSSize(width: 64, height: 64))
     }
+
+    /// 菜单栏状态项图标（源图：`App/appicon.png`，经 SPM 打入包内）
+    static func menuBarIcon() -> NSImage {
+        guard let url = bundle.url(forResource: "appicon", withExtension: "png"),
+              let original = NSImage(contentsOf: url) else {
+            if let sys = NSImage(systemSymbolName: "hourglass", accessibilityDescription: nil) {
+                return sys
+            }
+            return NSImage(size: NSSize(width: 18, height: 18))
+        }
+        let target = NSSize(width: 18, height: 18)
+        return NSImage(size: target, flipped: false) { rect in
+            original.draw(
+                in: rect,
+                from: NSRect(origin: .zero, size: original.size),
+                operation: .sourceOver,
+                fraction: 1.0
+            )
+            return true
+        }
+    }
 }

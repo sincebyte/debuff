@@ -29,7 +29,7 @@ struct MainSettingsView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 0) {
-                SettingsSectionBlock(title: "久坐阈值", titleBarFill: Color.accentColor.opacity(0.14)) {
+                SettingsSectionBlock(title: "久坐阈值" ) {
                     HStack(spacing: 0) {
                         TextField("分钟", text: $thresholdText)
                             .focused($thresholdFieldFocused)
@@ -42,12 +42,9 @@ struct MainSettingsView: View {
                         Text("分钟")
                             .foregroundStyle(.secondary)
                     }
-                    Text("约 0.1～240 分钟；改完后点「保存」生效。")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
                 }
 
-                SettingsSectionBlock(title: "icon图片", titleBarFill: Color.accentColor.opacity(0.14)) {
+                SettingsSectionBlock(title: "icon图片") {
                     HStack {
                         Button("选择图片…") {
                             pickIcon()
@@ -66,7 +63,7 @@ struct MainSettingsView: View {
                     }
                 }
 
-                SettingsSectionBlock(title: "当前状态", titleBarFill: Color.accentColor.opacity(0.14)) {
+                SettingsSectionBlock(title: "当前状态") {
                     TimelineView(.periodic(from: .now, by: 0.5)) { context in
                         let sitMin = context.date.timeIntervalSince(monitor.sessionStart) / 60
                         LabeledContent("当前久坐") {
@@ -93,8 +90,8 @@ struct MainSettingsView: View {
             .disabled(!hasUnsavedChanges)
             .padding(.top, 8)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background(MainSettingsWindowCloseBehavior())
+        // 菜单栏弹出层无固定高度时，`maxHeight: .infinity` 会被算成 0，界面不可见
+        .frame(maxWidth: .infinity, alignment: .topLeading)
         .onAppear {
             loadDraftFromMonitor()
             panelBridge.sync()
@@ -171,37 +168,6 @@ struct MainSettingsView: View {
     }
 }
 
-/// 拦截左上角关闭：仅隐藏主设置窗口，避免 SwiftUI 把该窗口当作「关闭」而结束应用。
-private struct MainSettingsWindowCloseBehavior: NSViewRepresentable {
-    final class Delegate: NSObject, NSWindowDelegate {
-        func windowShouldClose(_ sender: NSWindow) -> Bool {
-            sender.orderOut(nil)
-            return false
-        }
-    }
-
-    func makeCoordinator() -> Delegate {
-        Delegate()
-    }
-
-    func makeNSView(context: Context) -> NSView {
-        let view = NSView()
-        attachIfNeeded(view: view, delegate: context.coordinator)
-        return view
-    }
-
-    func updateNSView(_ nsView: NSView, context: Context) {
-        attachIfNeeded(view: nsView, delegate: context.coordinator)
-    }
-
-    private func attachIfNeeded(view: NSView, delegate: Delegate) {
-        DispatchQueue.main.async {
-            guard let window = view.window else { return }
-            window.delegate = delegate
-        }
-    }
-}
-
 private enum SettingsSectionTitleMetrics {
     /// 中英混排标题行高会不一致，固定条高与各段对齐
     static let barHeight: CGFloat = 44
@@ -238,7 +204,7 @@ private struct SettingsSectionBlock<Content: View>: View {
         .clipShape(RoundedRectangle(cornerRadius: 0, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 0, style: .continuous)
-                .strokeBorder(Color(nsColor: .separatorColor), lineWidth: 1)
+                .strokeBorder(Color(nsColor: .separatorColor), lineWidth: 0)
         )
     }
 }

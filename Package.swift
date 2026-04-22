@@ -15,6 +15,7 @@ let package = Package(
             path: "Sources/SedentaryDebuff",
             resources: [
                 .process("Resources"),
+                .copy("../../App/appicon.png"),
             ]
         ),
     ]

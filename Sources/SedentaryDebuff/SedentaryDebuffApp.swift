@@ -6,13 +6,23 @@ struct SedentaryDebuffApp: App {
     @StateObject private var services = AppServices()
 
     var body: some Scene {
-        Window("debuff", id: "settings") {
+        MenuBarExtra {
+            settingsContent
+        } label: {
+            Image(nsImage: BundledAssets.menuBarIcon())
+        }
+        .menuBarExtraStyle(.window)
+    }
+
+    @ViewBuilder
+    private var settingsContent: some View {
+        ScrollView {
             MainSettingsView()
                 .environmentObject(services.monitor)
                 .environmentObject(services.panelBridge)
-                .frame(minWidth: 280, idealWidth: 280, minHeight: 260, idealHeight: 260)
+                .frame(maxWidth: 280, alignment: .topLeading)
         }
-        .defaultSize(width: 280, height: 260)
-        .windowResizability(.automatic)
+        .frame(width: 200, height: 360)
+        .fixedSize(horizontal: true, vertical: true)
     }
 }
