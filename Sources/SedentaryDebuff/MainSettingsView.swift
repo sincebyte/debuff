@@ -26,6 +26,13 @@ struct MainSettingsView: View {
         thresholdDiffersFromSaved || draftCustomIconPath != monitor.customIconPath
     }
 
+    /// 底部按钮同宽、同样式，整组宽度固定以便水平居中
+    private static let settingsActionButtonSpacing: CGFloat = 8
+    private static let settingsActionButtonSide: CGFloat = 100
+    private static var settingsActionButtonRowWidth: CGFloat {
+        settingsActionButtonSide * 2 + settingsActionButtonSpacing
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 0) {
@@ -82,12 +89,24 @@ struct MainSettingsView: View {
             }
             .frame(maxWidth: .infinity, alignment: .topLeading)
 
-            Button("保存") {
-                applySavedConfiguration()
+            HStack {
+                Spacer(minLength: 0)
+                HStack(spacing: Self.settingsActionButtonSpacing) {
+                    Button("退出") {
+                        NSApplication.shared.terminate(nil)
+                    }
+                    .frame(maxWidth: .infinity)
+                    Button("保存") {
+                        applySavedConfiguration()
+                    }
+                    .frame(maxWidth: .infinity)
+                    .disabled(!hasUnsavedChanges)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.regular)
+                .frame(width: Self.settingsActionButtonRowWidth)
+                Spacer(minLength: 0)
             }
-            .frame(maxWidth: .infinity)
-            .buttonStyle(.borderedProminent)
-            .disabled(!hasUnsavedChanges)
             .padding(.top, 8)
         }
         // 菜单栏弹出层无固定高度时，`maxHeight: .infinity` 会被算成 0，界面不可见
