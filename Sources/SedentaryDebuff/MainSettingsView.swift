@@ -125,9 +125,6 @@ struct MainSettingsView: View {
                 commitThresholdInput()
             }
         }
-        .onChange(of: monitor.debuffVisible) { _ in
-            panelBridge.sync()
-        }
     }
 
     private func loadDraftFromMonitor() {

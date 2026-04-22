@@ -56,13 +56,16 @@ final class DebuffPanelController {
             )
             panel.isOpaque = false
             panel.backgroundColor = .clear
-            panel.level = .floating
+            // `.floating` 过低，易被其他应用的文档/工具窗口压住；用 statusBar 档并 +1，贴近「总在最前」且仍低于系统弹出菜单档
+            panel.level = NSWindow.Level(rawValue: NSWindow.Level.statusBar.rawValue + 1)
             panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
             panel.hasShadow = true
             panel.isMovableByWindowBackground = true
             panel.contentView = host
             panel.setContentSize(size)
             self.panel = panel
+            // 立刻参与同 level 的 z-order，避免仅等 async 下一帧时才 orderFront，被当前前台 app 的绘制压在下面
+            panel.orderFrontRegardless()
 
             // 等 SwiftUI / HostingView 完成首帧布局后再取 frame 并恢复，避免冷启动与上次 session 的窗口尺寸不一致导致 origin 看起来偏移
             let epochAtSchedule = visibilityEpoch
