@@ -7,22 +7,12 @@ struct SedentaryDebuffApp: App {
 
     var body: some Scene {
         MenuBarExtra {
-            settingsContent
-        } label: {
-            Image(nsImage: BundledAssets.menuBarIcon())
-        }
-        .menuBarExtraStyle(.window)
-    }
-
-    @ViewBuilder
-    private var settingsContent: some View {
-        ScrollView {
             MainSettingsView()
                 .environmentObject(services.monitor)
                 .environmentObject(services.panelBridge)
-                .frame(maxWidth: 280, alignment: .topLeading)
+        } label: {
+            Image(nsImage: BundledAssets.menuBarIcon())
         }
-        .frame(width: 200, height: 360)
-        .fixedSize(horizontal: true, vertical: true)
+        .menuBarExtraStyle(.menu)
     }
 }

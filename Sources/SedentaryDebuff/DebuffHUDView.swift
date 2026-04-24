@@ -18,6 +18,18 @@ struct DebuffHUDView: View {
     }
 
     var body: some View {
+        Group {
+            if monitor.showDebuff {
+                TimelineView(.periodic(from: .now, by: 0.25)) { _ in
+                    hudContent
+                }
+            } else {
+                hudContent
+            }
+        }
+    }
+
+    private var hudContent: some View {
         VStack(spacing: 0) {
             ZStack {
                 iconView

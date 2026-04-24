@@ -6,8 +6,6 @@ final class SedentaryMonitor: ObservableObject {
     @Published private(set) var sessionStart: Date
     /// 供界面 `onChange` 监听 debuff 显示/隐藏（计算属性 `showDebuff` 无法触发 `onChange`）
     @Published private(set) var debuffVisible: Bool = false
-    /// 定时递增，驱动 HUD 久坐分钟数等 UI 刷新（久坐进行中时 `debuffVisible` 可能不变）
-    @Published private(set) var tick: UInt64 = 0
 
     @Published var thresholdMinutes: Double {
         didSet { UserDefaults.standard.set(thresholdMinutes, forKey: Self.thresholdKey) }
@@ -36,10 +34,10 @@ final class SedentaryMonitor: ObservableObject {
             .autoconnect()
             .sink { [weak self] _ in
                 guard let self else { return }
-                self.debuffVisible = self.showDebuff
-                // 仅在 debuff 显示时递增 tick，避免设置页每 0.25s 整页刷新打断数值输入
-                if self.showDebuff {
-                    self.tick &+= 1
+                // 仅在实际跨越阈值时发布，避免 `Menu`/子菜单因高频 `objectWillChange` 被拆掉（闪烁、无法点选）
+                let v = self.showDebuff
+                if self.debuffVisible != v {
+                    self.debuffVisible = v
                 }
             }
     }
