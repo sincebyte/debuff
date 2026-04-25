@@ -6,6 +6,8 @@ import Foundation
 /// 微信未读：从收到未读/新消息起计时并立即在 HUD 展示（读 Dock 角标）。
 final class WeChatDebuffMonitor: ObservableObject {
     @Published private(set) var weChatDebuffVisible: Bool = false
+    /// 本次 debuff 在 HUD 上变为可见的时刻，用于与飞书等并排时「新出现的靠左」排序
+    @Published private(set) var hudShownAt: Date?
 
     @Published var weChatCustomIconPath: String? {
         didSet { UserDefaults.standard.set(weChatCustomIconPath, forKey: Self.weChatIconPathKey) }
@@ -73,6 +75,7 @@ final class WeChatDebuffMonitor: ObservableObject {
             messageEpochStart = nil
             if weChatDebuffVisible {
                 weChatDebuffVisible = false
+                hudShownAt = nil
             }
             return
         }
@@ -88,7 +91,11 @@ final class WeChatDebuffMonitor: ObservableObject {
         }
         lastRawBadge = b
         lastIntCount = n
+        let wasVisible = weChatDebuffVisible
         weChatDebuffVisible = true
+        if !wasVisible {
+            hudShownAt = Date()
+        }
     }
 
     var showWeChatDebuff: Bool { weChatDebuffVisible }

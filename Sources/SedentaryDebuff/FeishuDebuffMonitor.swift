@@ -7,6 +7,8 @@ import Foundation
 /// 每 2 秒轮询角标；无未读时隐藏浮窗、清空角标与计时时长。
 final class FeishuDebuffMonitor: ObservableObject {
     @Published private(set) var feishuDebuffVisible: Bool = false
+    /// 本次 debuff 在 HUD 上变为可见的时刻，用于与微信等并排时「新出现的靠左」排序
+    @Published private(set) var hudShownAt: Date?
 
     /// 当前从 Dock 读到的未读角标文案，无未读时为 `nil`（供状态展示与“清理数值”）
     @Published private(set) var feishuUnreadBadgeText: String?
@@ -77,7 +79,10 @@ final class FeishuDebuffMonitor: ObservableObject {
             lastIntCount = nil
             messageEpochStart = nil
             feishuUnreadBadgeText = nil
-            feishuDebuffVisible = false
+            if feishuDebuffVisible {
+                feishuDebuffVisible = false
+                hudShownAt = nil
+            }
             return
         }
         let prevR = lastRawBadge
@@ -93,7 +98,11 @@ final class FeishuDebuffMonitor: ObservableObject {
         lastRawBadge = b
         lastIntCount = n
         feishuUnreadBadgeText = b
+        let wasVisible = feishuDebuffVisible
         feishuDebuffVisible = true
+        if !wasVisible {
+            hudShownAt = Date()
+        }
     }
 
     var showFeishuDebuff: Bool { feishuDebuffVisible }

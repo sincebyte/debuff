@@ -112,8 +112,16 @@ final class DebuffPanelController {
                 }
             }
         } else {
-            panel?.setContentSize(size)
-            panel?.orderFrontRegardless()
+            guard let panel else { return }
+            // `setContentSize` 默认固定左下角：变宽时整窗向右长，右对齐的图标会「被挤向屏幕右侧」。
+            // 先记下右缘与底边，改尺寸后再把 origin 左移，保持右缘不动，新出现的槽位向左扩展（与 float:right 一致）。
+            let oldFrame = panel.frame
+            let anchorMaxX = oldFrame.maxX
+            let anchorMinY = oldFrame.minY
+            panel.setContentSize(size)
+            let newFrame = panel.frame
+            panel.setFrameOrigin(NSPoint(x: anchorMaxX - newFrame.width, y: anchorMinY))
+            panel.orderFrontRegardless()
         }
     }
 

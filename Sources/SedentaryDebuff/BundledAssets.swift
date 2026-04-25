@@ -41,6 +41,10 @@ enum BundledAssets {
 
     /// 微信未读 debuff 图标（Terraria Silenced）
     static func weChatDebuffIcon() -> NSImage {
+        if let url = bundle.url(forResource: "wechat", withExtension: "png"),
+           let img = NSImage(contentsOf: url) {
+            return img
+        }
         if let url = bundle.url(forResource: "ui_chat", withExtension: "jpg"),
            let img = NSImage(contentsOf: url) {
             return img
@@ -53,6 +57,10 @@ enum BundledAssets {
 
     /// 飞书未读 debuff 默认图标
     static func feishuDebuffIcon() -> NSImage {
+        if let url = bundle.url(forResource: "飞书", withExtension: "png"),
+           let img = NSImage(contentsOf: url) {
+            return img
+        }
         if let sys = NSImage(systemSymbolName: "bubble.left.and.bubble.right", accessibilityDescription: nil) {
             return sys
         }
