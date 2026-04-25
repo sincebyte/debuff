@@ -148,7 +148,7 @@ struct MainSettingsView: View {
                     }
                 }
             } label: {
-                Text("阈值：\(MainSettingsView.formatMinutes(shownSelected)) 分钟")
+                Text("定时：\(MainSettingsView.formatMinutes(shownSelected)) 分钟")
             }
         }
 

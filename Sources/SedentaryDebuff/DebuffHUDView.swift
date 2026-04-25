@@ -70,12 +70,12 @@ struct DebuffHUDView: View {
                 let dx = Self.minutesStrokeOffsets[i].0
                 let dy = Self.minutesStrokeOffsets[i].1
                 Text(string)
-                    .font(Self.minutesFont)
+                    .font(.custom("Departure Mono", size: 14))
                     .foregroundStyle(Color.black)
                     .offset(x: dx, y: dy)
             }
             Text(string)
-                .font(Self.minutesFont)
+                .font(.custom("Departure Mono", size: 14))
                 .foregroundStyle(Self.minutesFill)
         }
     }
