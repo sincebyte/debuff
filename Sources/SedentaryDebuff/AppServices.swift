@@ -5,6 +5,7 @@ import SwiftUI
 final class AppServices: ObservableObject {
     let monitor: SedentaryMonitor
     let weChat: WeChatDebuffMonitor
+    let debuffHUDVisibility: DebuffHUDVisibility
     let panelBridge: DebuffPanelBridge
 
     private var screenUnlockObserver: NSObjectProtocol?
@@ -12,9 +13,11 @@ final class AppServices: ObservableObject {
     init() {
         let m = SedentaryMonitor()
         let w = WeChatDebuffMonitor()
+        let v = DebuffHUDVisibility()
         monitor = m
         weChat = w
-        panelBridge = DebuffPanelBridge(monitor: m, weChat: w)
+        debuffHUDVisibility = v
+        panelBridge = DebuffPanelBridge(monitor: m, weChat: w, debuffHUDVisibility: v)
 
         screenUnlockObserver = DistributedNotificationCenter.default().addObserver(
             forName: Notification.Name("com.apple.screenIsUnlocked"),

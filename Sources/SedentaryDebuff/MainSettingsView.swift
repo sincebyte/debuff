@@ -8,6 +8,7 @@ struct MainSettingsView: View {
     @EnvironmentObject private var monitor: SedentaryMonitor
     @EnvironmentObject private var weChat: WeChatDebuffMonitor
     @EnvironmentObject private var panelBridge: DebuffPanelBridge
+    @EnvironmentObject private var debuffHUDVisibility: DebuffHUDVisibility
 
     /// 打开菜单时刷新一次；避免在 NSMenu 内用 `TimelineView` 高频重绘（易闪退）
     @State private var statusSitLine = ""
@@ -65,6 +66,9 @@ struct MainSettingsView: View {
 
             Divider()
 
+            Toggle("显示 Debuff 状态", isOn: $debuffHUDVisibility.isEnabled)
+                .help("关闭时隐藏屏幕上的微信 / 久坐 debuff 浮窗，不影响菜单栏图标与计时逻辑。")
+
             Button("退出") {
                 NSApplication.shared.terminate(nil)
             }
@@ -91,11 +95,11 @@ struct MainSettingsView: View {
         statusDebuffLine = Self.showDebuff(at: now, monitor: monitor) ? "Debuff：显示中" : "Debuff：未触发"
         statusThresholdLine = "当前阈值 \(Self.formatMinutes(monitor.thresholdMinutes)) 分钟"
         if weChat.weChatDebuffVisible {
-            statusWeChatLine = String(format: "微信未读 debuff：%.1f 分钟", weChat.weChatMinutesForDisplay)
+            statusWeChatLine = String(format: "微信未读：%.1f 分钟", weChat.weChatMinutesForDisplay)
         } else if !AXIsProcessTrusted() {
             statusWeChatLine = "微信未读：未授权辅助功能，无法读 Dock 角标"
         } else {
-            statusWeChatLine = "微信未读 debuff：无（须将微信保留在 Dock 且出现角标）"
+            statusWeChatLine = "微信未读：无"
         }
     }
 
@@ -159,7 +163,7 @@ struct MainSettingsView: View {
                     }
                 }
             } label: {
-                Text("定时：\(MainSettingsView.formatMinutes(shownSelected)) 分钟")
+                Text("久坐定时：\(MainSettingsView.formatMinutes(shownSelected)) 分钟")
             }
         }
 
