@@ -9,6 +9,7 @@ struct SedentaryDebuffApp: App {
         MenuBarExtra {
             MainSettingsView()
                 .environmentObject(services.monitor)
+                .environmentObject(services.weChat)
                 .environmentObject(services.panelBridge)
         } label: {
             Image(nsImage: BundledAssets.menuBarIcon())

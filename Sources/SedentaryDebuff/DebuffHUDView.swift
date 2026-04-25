@@ -43,7 +43,7 @@ struct DebuffHUDView: View {
             }
             .frame(width: hudWidth, height: hudWidth)
 
-            outlinedMinutesText(formattedMinutes)
+            outlinedMinutesText
         }
         .contentShape(Rectangle())
         .onTapGesture(count: 2) {
@@ -57,27 +57,8 @@ struct DebuffHUDView: View {
         return String(format: "%.1fm", m)
     }
 
-    private static let minutesFont = Font.system(size: 14, weight: .thin, design: .serif)
-    private static let minutesFill = Color(red: 0.95, green: 0.85, blue: 0.45)
-    private static let minutesStrokeOffsets: [(CGFloat, CGFloat)] = [
-        (-1, 0), (1, 0), (0, -1), (0, 1),
-        (-1, -1), (-1, 1), (1, -1), (1, 1),
-    ]
-
-    private func outlinedMinutesText(_ string: String) -> some View {
-        ZStack {
-            ForEach(0 ..< Self.minutesStrokeOffsets.count, id: \.self) { i in
-                let dx = Self.minutesStrokeOffsets[i].0
-                let dy = Self.minutesStrokeOffsets[i].1
-                Text(string)
-                    .font(.custom("Departure Mono", size: 14))
-                    .foregroundStyle(Color.black)
-                    .offset(x: dx, y: dy)
-            }
-            Text(string)
-                .font(.custom("Departure Mono", size: 14))
-                .foregroundStyle(Self.minutesFill)
-        }
+    private var outlinedMinutesText: some View {
+        DebuffTimeOutlinedText(string: formattedMinutes)
     }
 
     @ViewBuilder

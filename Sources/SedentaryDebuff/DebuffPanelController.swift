@@ -23,8 +23,9 @@ final class DebuffPanelController {
 
     func update(
         show: Bool,
+        weChat: WeChatDebuffMonitor,
         monitor: SedentaryMonitor,
-        onDoubleClick: @escaping () -> Void
+        onSedentaryDoubleClick: @escaping () -> Void
     ) {
         guard show else {
             visibilityEpoch += 1
@@ -33,20 +34,40 @@ final class DebuffPanelController {
         }
 
         let border = BundledAssets.borderImage()
-        let hudWidth: CGFloat = 120
+        let colWidth: CGFloat = 50
+        let gap: CGFloat = 6
+        let weChatOn = weChat.showWeChatDebuff
+        let sitOn = monitor.showDebuff
+        let count = (weChatOn ? 1 : 0) + (sitOn ? 1 : 0)
+        let contentW: CGFloat
+        if count == 0 {
+            contentW = 120
+        } else if count == 1 {
+            contentW = 120
+        } else {
+            contentW = colWidth * 2 + gap
+        }
+        let panelWidth: CGFloat = max(120, contentW)
         let frameH: CGFloat = {
             let b = border.size
-            guard b.width > 0 else { return hudWidth }
-            return hudWidth * b.height / b.width
+            let refW: CGFloat = 50
+            guard b.width > 0 else { return refW }
+            return refW * b.height / b.width
         }()
         let timerRow: CGFloat = 22
         let spacing: CGFloat = 6
-        let size = NSSize(width: hudWidth, height: frameH + spacing + timerRow)
+        let size = NSSize(width: panelWidth, height: frameH + spacing + timerRow)
 
         if panel == nil {
-            let content = DebuffHUDView(monitor: monitor, onDoubleClick: onDoubleClick)
-                .environmentObject(monitor)
+            let content = CombinedDebuffHUDView(
+                weChat: weChat,
+                monitor: monitor,
+                onSedentaryDoubleClick: onSedentaryDoubleClick
+            )
+            .environmentObject(monitor)
             let host = NSHostingView(rootView: AnyView(content))
+            // 让 root 能占满内容区，否则 `Spacer` 无法把图标组顶到右侧（float right）
+            host.sizingOptions = .minSize
 
             let panel = KeyablePanel(
                 contentRect: NSRect(origin: .zero, size: size),
@@ -87,6 +108,7 @@ final class DebuffPanelController {
                 }
             }
         } else {
+            panel?.setContentSize(size)
             panel?.orderFrontRegardless()
         }
     }

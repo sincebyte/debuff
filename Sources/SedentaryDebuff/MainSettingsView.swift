@@ -1,16 +1,19 @@
 import AppKit
+import ApplicationServices
 import Combine
 import SwiftUI
 import UniformTypeIdentifiers
 
 struct MainSettingsView: View {
     @EnvironmentObject private var monitor: SedentaryMonitor
+    @EnvironmentObject private var weChat: WeChatDebuffMonitor
     @EnvironmentObject private var panelBridge: DebuffPanelBridge
 
     /// 打开菜单时刷新一次；避免在 NSMenu 内用 `TimelineView` 高频重绘（易闪退）
     @State private var statusSitLine = ""
     @State private var statusDebuffLine = ""
     @State private var statusThresholdLine = ""
+    @State private var statusWeChatLine = ""
 
     /// 主菜单展开期间保持固定，子菜单内不读 `monitor.thresholdMinutes`，避免 `@Published`
     /// 在子菜单仍打开时刷新整棵 `NSMenu` 导致二级菜单被拆掉。
@@ -57,6 +60,7 @@ struct MainSettingsView: View {
 
             Section {
                 Text(statusSitLine)
+                Text(statusWeChatLine)
             }
 
             Divider()
@@ -86,6 +90,13 @@ struct MainSettingsView: View {
         statusSitLine = String(format: "当前久坐 %.1f 分钟", sitMin)
         statusDebuffLine = Self.showDebuff(at: now, monitor: monitor) ? "Debuff：显示中" : "Debuff：未触发"
         statusThresholdLine = "当前阈值 \(Self.formatMinutes(monitor.thresholdMinutes)) 分钟"
+        if weChat.weChatDebuffVisible {
+            statusWeChatLine = String(format: "微信未读 debuff：%.1f 分钟", weChat.weChatMinutesForDisplay)
+        } else if !AXIsProcessTrusted() {
+            statusWeChatLine = "微信未读：未授权辅助功能，无法读 Dock 角标"
+        } else {
+            statusWeChatLine = "微信未读 debuff：无（须将微信保留在 Dock 且出现角标）"
+        }
     }
 
     fileprivate static func formatMinutes(_ value: Double) -> String {

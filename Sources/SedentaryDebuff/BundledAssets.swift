@@ -1,9 +1,24 @@
 import AppKit
+import CoreText
 import Foundation
+import SwiftUI
 
-/// 随包资源：`border.png` 为 debuff 外框，`sentinel-juggernautstance-128.png` 为默认技能图标。
+/// 随包资源：`border.png` 为 debuff 外框；`sentinel-juggernautstance-128.png` 为久坐默认技能图标；`silenced.png` 为微信未读；`DepartureMono-Regular.otf` 在启动时注册。
 enum BundledAssets {
     private static let bundle = Bundle.module
+
+    /// 包内 Departure Mono Regular 的 PostScript 名，用于 `Font.custom`（需先 `registerBundledFonts()`）。
+    private static let departureMonoPSName = "DepartureMono-Regular"
+
+    static func departureMonoFont(size: CGFloat) -> Font {
+        .custom(Self.departureMonoPSName, size: size)
+    }
+
+    static func registerBundledFonts() {
+        guard let url = bundle.url(forResource: "DepartureMono-Regular", withExtension: "otf") else { return }
+        var error: Unmanaged<CFError>?
+        _ = CTFontManagerRegisterFontsForURL(url as CFURL, .process, &error)
+    }
 
     static func borderImage() -> NSImage {
         if let url = bundle.url(forResource: "border", withExtension: "png"),
@@ -22,6 +37,18 @@ enum BundledAssets {
             return sys
         }
         return NSImage(size: NSSize(width: 64, height: 64))
+    }
+
+    /// 微信未读 debuff 图标（Terraria Silenced）
+    static func weChatDebuffIcon() -> NSImage {
+        if let url = bundle.url(forResource: "silenced", withExtension: "png"),
+           let img = NSImage(contentsOf: url) {
+            return img
+        }
+        if let sys = NSImage(systemSymbolName: "message.badge", accessibilityDescription: nil) {
+            return sys
+        }
+        return NSImage(size: NSSize(width: 32, height: 32))
     }
 
     /// 菜单栏状态项图标（源图：`App/appicon.png`，经 SPM 打入包内）
