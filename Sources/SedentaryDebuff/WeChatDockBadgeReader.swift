@@ -73,7 +73,8 @@ enum WeChatDockBadgeReader {
         }
     }
 
-    private static func isWeChatDockItem(_ element: AXUIElement) -> Bool {
+    /// 供飞书 Dock 读取等场景排除微信角标，避免与飞书检测串台。
+    static func isWeChatDockItem(_ element: AXUIElement) -> Bool {
         if identityStringsMatchWeChat(in: element) { return true }
         var p = parentElement(element)
         for _ in 0 ..< 8 {

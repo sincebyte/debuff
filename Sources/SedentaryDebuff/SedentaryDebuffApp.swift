@@ -11,6 +11,7 @@ struct SedentaryDebuffApp: App {
             MainSettingsView()
                 .environmentObject(services.monitor)
                 .environmentObject(services.weChat)
+                .environmentObject(services.feishu)
                 .environmentObject(services.panelBridge)
                 .environmentObject(services.debuffHUDVisibility)
         } label: {

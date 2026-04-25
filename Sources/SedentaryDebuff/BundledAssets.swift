@@ -51,6 +51,17 @@ enum BundledAssets {
         return NSImage(size: NSSize(width: 32, height: 32))
     }
 
+    /// 飞书未读 debuff 默认图标
+    static func feishuDebuffIcon() -> NSImage {
+        if let sys = NSImage(systemSymbolName: "bubble.left.and.bubble.right", accessibilityDescription: nil) {
+            return sys
+        }
+        if let sys = NSImage(systemSymbolName: "message", accessibilityDescription: nil) {
+            return sys
+        }
+        return NSImage(size: NSSize(width: 32, height: 32))
+    }
+
     /// 菜单栏状态项图标（源图：`App/appicon.png`，经 SPM 打入包内）
     static func menuBarIcon() -> NSImage {
         guard let url = bundle.url(forResource: "appicon", withExtension: "png"),

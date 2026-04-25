@@ -24,6 +24,7 @@ final class DebuffPanelController {
     func update(
         show: Bool,
         weChat: WeChatDebuffMonitor,
+        feishu: FeishuDebuffMonitor,
         monitor: SedentaryMonitor,
         onSedentaryDoubleClick: @escaping () -> Void
     ) {
@@ -37,15 +38,17 @@ final class DebuffPanelController {
         let colWidth: CGFloat = 50
         let gap: CGFloat = 6
         let weChatOn = weChat.showWeChatDebuff
+        let feishuOn = feishu.showFeishuDebuff
         let sitOn = monitor.showDebuff
-        let count = (weChatOn ? 1 : 0) + (sitOn ? 1 : 0)
+        let count = (weChatOn ? 1 : 0) + (feishuOn ? 1 : 0) + (sitOn ? 1 : 0)
         let contentW: CGFloat
         if count == 0 {
             contentW = 120
         } else if count == 1 {
             contentW = 120
         } else {
-            contentW = colWidth * 2 + gap
+            let icons = colWidth * CGFloat(count) + gap * CGFloat(max(0, count - 1))
+            contentW = icons
         }
         let panelWidth: CGFloat = max(120, contentW)
         let frameH: CGFloat = {
@@ -61,6 +64,7 @@ final class DebuffPanelController {
         if panel == nil {
             let content = CombinedDebuffHUDView(
                 weChat: weChat,
+                feishu: feishu,
                 monitor: monitor,
                 onSedentaryDoubleClick: onSedentaryDoubleClick
             )

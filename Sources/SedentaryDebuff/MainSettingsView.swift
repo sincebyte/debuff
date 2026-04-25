@@ -7,6 +7,7 @@ import UniformTypeIdentifiers
 struct MainSettingsView: View {
     @EnvironmentObject private var monitor: SedentaryMonitor
     @EnvironmentObject private var weChat: WeChatDebuffMonitor
+    @EnvironmentObject private var feishu: FeishuDebuffMonitor
     @EnvironmentObject private var panelBridge: DebuffPanelBridge
     @EnvironmentObject private var debuffHUDVisibility: DebuffHUDVisibility
 
@@ -15,6 +16,7 @@ struct MainSettingsView: View {
     @State private var statusDebuffLine = ""
     @State private var statusThresholdLine = ""
     @State private var statusWeChatLine = ""
+    @State private var statusFeishuLine = ""
 
     /// 主菜单展开期间保持固定，子菜单内不读 `monitor.thresholdMinutes`，避免 `@Published`
     /// 在子菜单仍打开时刷新整棵 `NSMenu` 导致二级菜单被拆掉。
@@ -73,18 +75,36 @@ struct MainSettingsView: View {
                         .foregroundStyle(.secondary)
                 }
             } header: {
-                Text("消息未读图标")
+                Text("微信未读图标")
+            }
+
+            Section {
+                Button("选择图片…") { pickFeishuUnreadIcon() }
+                if feishu.feishuCustomIconPath != nil {
+                    Button("恢复默认") {
+                        feishu.feishuCustomIconPath = nil
+                        panelBridge.sync()
+                        refreshStatusSnapshot()
+                    }
+                }
+                if let p = feishu.feishuCustomIconPath {
+                    Text((p as NSString).lastPathComponent)
+                        .foregroundStyle(.secondary)
+                }
+            } header: {
+                Text("飞书未读图标")
             }
 
             Section {
                 Text(statusSitLine)
                 Text(statusWeChatLine)
+                Text(statusFeishuLine)
             }
 
             Divider()
 
             Toggle("显示 Debuff 状态", isOn: $debuffHUDVisibility.isEnabled)
-                .help("关闭时隐藏屏幕上的微信 / 久坐 debuff 浮窗，不影响菜单栏图标与计时逻辑。")
+                .help("关闭时隐藏屏幕上的微信 / 飞书 / 久坐 debuff 浮窗，不影响菜单栏图标与计时逻辑。")
 
             Button("退出") {
                 NSApplication.shared.terminate(nil)
@@ -103,6 +123,13 @@ struct MainSettingsView: View {
         .onReceive(NotificationCenter.default.publisher(for: NSMenu.didBeginTrackingNotification)) { _ in
             refreshStatusSnapshot()
         }
+        // 每 2 秒轮询角标后若已无未读，需立刻刷新，否则到下次打开菜单前状态行会停在旧读数/计时
+        .onReceive(feishu.$feishuDebuffVisible) { _ in
+            refreshStatusSnapshot()
+        }
+        .onReceive(feishu.$feishuUnreadBadgeText) { _ in
+            refreshStatusSnapshot()
+        }
     }
 
     private func refreshStatusSnapshot() {
@@ -117,6 +144,13 @@ struct MainSettingsView: View {
             statusWeChatLine = "微信未读：未授权辅助功能，无法读 Dock 角标"
         } else {
             statusWeChatLine = "微信未读：无"
+        }
+        if feishu.feishuDebuffVisible {
+            statusFeishuLine = String(format: "飞书未读：%.1f 分钟", feishu.feishuMinutesForDisplay)
+        } else if !AXIsProcessTrusted() {
+            statusFeishuLine = "飞书未读：未授权辅助功能，无法读 Dock 角标"
+        } else {
+            statusFeishuLine = "飞书未读：无"
         }
     }
 
@@ -160,9 +194,23 @@ struct MainSettingsView: View {
         panel.allowedContentTypes = [.image]
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
-        panel.title = "选择消息未读 Debuff 图标"
+        panel.title = "选择微信未读 Debuff 图标"
         if panel.runModal() == .OK, let url = panel.url {
             weChat.weChatCustomIconPath = url.path
+            panelBridge.sync()
+            refreshStatusSnapshot()
+        }
+    }
+
+    private func pickFeishuUnreadIcon() {
+        NSApp.activate(ignoringOtherApps: true)
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.image]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.title = "选择飞书未读 Debuff 图标"
+        if panel.runModal() == .OK, let url = panel.url {
+            feishu.feishuCustomIconPath = url.path
             panelBridge.sync()
             refreshStatusSnapshot()
         }
