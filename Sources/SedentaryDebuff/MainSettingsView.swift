@@ -91,7 +91,7 @@ struct MainSettingsView: View {
     private func refreshStatusSnapshot() {
         let now = Date()
         let sitMin = now.timeIntervalSince(monitor.sessionStart) / 60
-        statusSitLine = String(format: "当前久坐 %.1f 分钟", sitMin)
+        statusSitLine = String(format: "当前久坐：%.1f 分钟", sitMin)
         statusDebuffLine = Self.showDebuff(at: now, monitor: monitor) ? "Debuff：显示中" : "Debuff：未触发"
         statusThresholdLine = "当前阈值 \(Self.formatMinutes(monitor.thresholdMinutes)) 分钟"
         if weChat.weChatDebuffVisible {
