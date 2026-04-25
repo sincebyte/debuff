@@ -7,6 +7,10 @@ import Foundation
 final class WeChatDebuffMonitor: ObservableObject {
     @Published private(set) var weChatDebuffVisible: Bool = false
 
+    @Published var weChatCustomIconPath: String? {
+        didSet { UserDefaults.standard.set(weChatCustomIconPath, forKey: Self.weChatIconPathKey) }
+    }
+
     private var poll: AnyCancellable?
     private var lastRawBadge: String?
     private var lastIntCount: Int?
@@ -14,7 +18,10 @@ final class WeChatDebuffMonitor: ObservableObject {
     private var messageEpochStart: Date?
     private var seenTrustedPrompt = false
 
+    private static let weChatIconPathKey = "weChatCustomDebuffIconPath"
+
     init() {
+        weChatCustomIconPath = UserDefaults.standard.string(forKey: Self.weChatIconPathKey)
         requestAXIfNeeded()
         startPolling()
     }

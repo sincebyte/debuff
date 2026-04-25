@@ -41,7 +41,7 @@ enum BundledAssets {
 
     /// 微信未读 debuff 图标（Terraria Silenced）
     static func weChatDebuffIcon() -> NSImage {
-        if let url = bundle.url(forResource: "silenced", withExtension: "png"),
+        if let url = bundle.url(forResource: "ui_chat", withExtension: "jpg"),
            let img = NSImage(contentsOf: url) {
             return img
         }

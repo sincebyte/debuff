@@ -28,9 +28,7 @@ struct WeChatDebuffHUDView: View {
     private var hudContent: some View {
         VStack(spacing: 0) {
             ZStack {
-                Image(nsImage: BundledAssets.weChatDebuffIcon())
-                    .resizable()
-                    .scaledToFill()
+                weChatIcon
                     .frame(width: iconWidth, height: iconWidth)
                     .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
 
@@ -45,6 +43,20 @@ struct WeChatDebuffHUDView: View {
             DebuffTimeOutlinedText(string: formattedMinutes)
         }
         .help("微信有未读：自最近新消息起计时；需在「隐私与安全性 → 辅助功能」中允许本应用以读取 Dock 角标。")
+    }
+
+    @ViewBuilder
+    private var weChatIcon: some View {
+        if let path = weChat.weChatCustomIconPath,
+           let ns = NSImage(contentsOfFile: path) {
+            Image(nsImage: ns)
+                .resizable()
+                .scaledToFill()
+        } else {
+            Image(nsImage: BundledAssets.weChatDebuffIcon())
+                .resizable()
+                .scaledToFill()
+        }
     }
 
     private var formattedMinutes: String {

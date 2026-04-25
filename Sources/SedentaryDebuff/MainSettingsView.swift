@@ -43,11 +43,9 @@ struct MainSettingsView: View {
             }
 
             Section {
-                Button("选择图片…") {
-                    pickIcon()
-                }
+                Button("选择图片…") { pickSedentaryIcon() }
                 if monitor.customIconPath != nil {
-                    Button("恢复默认图标") {
+                    Button("恢复默认") {
                         monitor.customIconPath = nil
                         panelBridge.sync()
                         refreshStatusSnapshot()
@@ -57,6 +55,25 @@ struct MainSettingsView: View {
                     Text((p as NSString).lastPathComponent)
                         .foregroundStyle(.secondary)
                 }
+            } header: {
+                Text("久坐图标")
+            }
+
+            Section {
+                Button("选择图片…") { pickWeChatUnreadIcon() }
+                if weChat.weChatCustomIconPath != nil {
+                    Button("恢复默认") {
+                        weChat.weChatCustomIconPath = nil
+                        panelBridge.sync()
+                        refreshStatusSnapshot()
+                    }
+                }
+                if let p = weChat.weChatCustomIconPath {
+                    Text((p as NSString).lastPathComponent)
+                        .foregroundStyle(.secondary)
+                }
+            } header: {
+                Text("消息未读图标")
             }
 
             Section {
@@ -123,15 +140,29 @@ struct MainSettingsView: View {
         return v
     }()
 
-    private func pickIcon() {
+    private func pickSedentaryIcon() {
         NSApp.activate(ignoringOtherApps: true)
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.image]
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
-        panel.title = "选择 Debuff 图标"
+        panel.title = "选择久坐 Debuff 图标"
         if panel.runModal() == .OK, let url = panel.url {
             monitor.customIconPath = url.path
+            panelBridge.sync()
+            refreshStatusSnapshot()
+        }
+    }
+
+    private func pickWeChatUnreadIcon() {
+        NSApp.activate(ignoringOtherApps: true)
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.image]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.title = "选择消息未读 Debuff 图标"
+        if panel.runModal() == .OK, let url = panel.url {
+            weChat.weChatCustomIconPath = url.path
             panelBridge.sync()
             refreshStatusSnapshot()
         }
