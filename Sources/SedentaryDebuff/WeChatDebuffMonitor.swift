@@ -91,9 +91,9 @@ final class WeChatDebuffMonitor: ObservableObject {
         }
         lastRawBadge = b
         lastIntCount = n
-        let wasVisible = weChatDebuffVisible
-        weChatDebuffVisible = true
-        if !wasVisible {
+        // 角标未消失时别每轮都 `= true`，避免高频 `objectWillChange` 拆掉 `Menu` 子菜单（与 `SedentaryMonitor` 一致）
+        if !weChatDebuffVisible {
+            weChatDebuffVisible = true
             hudShownAt = Date()
         }
     }

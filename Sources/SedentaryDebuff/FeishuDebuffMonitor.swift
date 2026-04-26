@@ -97,10 +97,12 @@ final class FeishuDebuffMonitor: ObservableObject {
         }
         lastRawBadge = b
         lastIntCount = n
-        feishuUnreadBadgeText = b
-        let wasVisible = feishuDebuffVisible
-        feishuDebuffVisible = true
-        if !wasVisible {
+        if feishuUnreadBadgeText != b {
+            feishuUnreadBadgeText = b
+        }
+        // 未读仍成立时别每 2s 发 `objectWillChange`，否则 `MainSettingsView` 重绘会拆掉子菜单
+        if !feishuDebuffVisible {
+            feishuDebuffVisible = true
             hudShownAt = Date()
         }
     }
