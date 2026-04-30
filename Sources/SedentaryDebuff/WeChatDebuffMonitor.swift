@@ -81,12 +81,7 @@ final class WeChatDebuffMonitor: ObservableObject {
         }
         let prevR = lastRawBadge
         let n = parseCount(b)
-        var resetEpoch = false
-        if prevR == nil { resetEpoch = true } else {
-            if let a = n, let last = lastIntCount, a > last { resetEpoch = true }
-            else if n == nil, b != (prevR ?? "") { resetEpoch = true }
-        }
-        if resetEpoch {
+        if prevR == nil {
             messageEpochStart = Date()
         }
         lastRawBadge = b
