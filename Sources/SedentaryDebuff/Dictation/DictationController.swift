@@ -51,10 +51,19 @@ final class DictationController: ObservableObject {
         }
         applyHotkey()
         waveformPanel.setActiveOpacity(settings.activeOpacity)
-        DispatchQueue.main.async { [weak self] in
-            self?.waveformPanel.show()
-            self?.waveformPanel.setActive(false)
+        waveformPanel.onWidthChange = { [weak self] width in
+            self?.settings.waveformWidth = Double(width)
         }
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.waveformPanel.setWidth(CGFloat(self.settings.waveformWidth))
+            self.waveformPanel.show()
+            self.waveformPanel.setActive(false)
+        }
+    }
+
+    func applyWaveformWidth() {
+        waveformPanel.setWidth(CGFloat(settings.waveformWidth))
     }
 
     deinit {

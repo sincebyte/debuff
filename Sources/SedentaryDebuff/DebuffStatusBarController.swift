@@ -36,6 +36,7 @@ final class DebuffStatusBarController: NSObject, NSMenuDelegate {
     private var pauseOptionItems: [NSMenuItem] = []
     private var maxSegmentItems: [NSMenuItem] = []
     private var activeOpacityItems: [NSMenuItem] = []
+    private var waveformWidthItems: [NSMenuItem] = []
     private var hotkeyPresetItems: [NSMenuItem] = []
 
     private var updateTimer: AnyCancellable?
@@ -241,6 +242,16 @@ final class DebuffStatusBarController: NSObject, NSMenuDelegate {
             activeOpacityItems.append(it)
         }
 
+        settingsMenu.addItem(subHeader("波形宽度"))
+        for v in DictationSettings.waveformWidthPresets {
+            let it = NSMenuItem(title: waveformWidthLabel(v), action: #selector(selectWaveformWidth(_:)), keyEquivalent: "")
+            it.target = self
+            it.representedObject = NSNumber(value: v)
+            it.state = abs(v - s.waveformWidth) < 0.0001 ? .on : .off
+            settingsMenu.addItem(it)
+            waveformWidthItems.append(it)
+        }
+
         settingsMenu.addItem(subHeader("STT 服务地址"))
         itemDictationURL = makeDisabled(s.sttURLString)
         settingsMenu.addItem(itemDictationURL)
@@ -407,6 +418,21 @@ final class DebuffStatusBarController: NSObject, NSMenuDelegate {
         refreshDictationItems()
     }
 
+    @objc private func selectWaveformWidth(_ sender: NSMenuItem) {
+        guard let n = sender.representedObject as? NSNumber else { return }
+        services.dictation.settings.waveformWidth = n.doubleValue
+        services.dictation.applyWaveformWidth()
+        refreshDictationItems()
+    }
+
+    private func waveformWidthLabel(_ v: Double) -> String {
+        switch Int(v) {
+        case 35: return "35（圆点）"
+        case 167: return "167（标准）"
+        default: return "\(Int(v))"
+        }
+    }
+
     @objc private func selectHotkey(_ sender: NSMenuItem) {
         guard let preset = sender.representedObject as? DictationHotKey.Preset else { return }
         services.dictation.settings.hotkeyKeyCode = preset.keyCode
@@ -550,6 +576,10 @@ final class DebuffStatusBarController: NSObject, NSMenuDelegate {
         for it in activeOpacityItems {
             guard let n = it.representedObject as? NSNumber else { continue }
             it.state = abs(n.doubleValue - s.activeOpacity) < 0.0001 ? .on : .off
+        }
+        for it in waveformWidthItems {
+            guard let n = it.representedObject as? NSNumber else { continue }
+            it.state = abs(n.doubleValue - s.waveformWidth) < 0.0001 ? .on : .off
         }
         for it in hotkeyPresetItems {
             guard let preset = it.representedObject as? DictationHotKey.Preset else { continue }

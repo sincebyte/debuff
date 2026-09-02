@@ -6,30 +6,28 @@ struct DictationWaveformView: View {
     @State private var tick = 0
 
     private let displaySeconds = 0.6
-    private let barCount = 30
     private let gain: Float = 15.0
     private let noiseFloor: Float = 0.001
-    private let idleOpacity = 0.28
+    private let idleOpacity = 0.0
 
     private let timer = Timer.publish(every: 0.033, on: .main, in: .common).autoconnect()
 
     var body: some View {
-        Canvas { context, size in
-            let _ = tick
-            if state.isActive {
-                drawBars(in: &context, size: size)
+        GeometryReader { geo in
+            let radius = min(geo.size.width, geo.size.height) / 2
+            ZStack {
+                RoundedRectangle(cornerRadius: radius, style: .continuous)
+                    .fill(Color.black.opacity(0.55))
+                RoundedRectangle(cornerRadius: radius, style: .continuous)
+                    .stroke(Color(red: 65.0 / 255.0, green: 65.0 / 255.0, blue: 67.0 / 255.0), lineWidth: 0.5)
+                Canvas { context, size in
+                    let _ = tick
+                    if state.isActive {
+                        drawBars(in: &context, size: size)
+                    }
+                }
             }
         }
-        .padding(4)
-        .background(
-            RoundedRectangle(cornerRadius: 13, style: .continuous)
-                .fill(Color.black.opacity(0.55))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 13, style: .continuous)
-                        .stroke(Color(red: 65.0 / 255.0, green: 65.0 / 255.0, blue: 67.0 / 255.0), lineWidth: 0.5)
-                )
-        )
-        .frame(width: 167, height: 35)
         .opacity(state.isActive ? state.activeOpacity : idleOpacity)
         .animation(.easeInOut(duration: 0.2), value: state.isActive)
         .onReceive(timer) { _ in
@@ -42,18 +40,29 @@ struct DictationWaveformView: View {
         let frameCount = max(2, Int(data.sampleRate * displaySeconds))
         let raw = data.readLast(count: frameCount)
         guard !raw.isEmpty else { return }
-        let amplitudes = amplitudeBars(raw, count: barCount)
 
-        let midY = size.height * 0.45
-        let maxHalf = size.height * 0.5 - 2
+        let inset: CGFloat = 4
+        let contentWidth = max(4, size.width - inset * 2)
+
+        // 音柱固定宽度/间距，容器加宽时只增加柱数或拉大间距，绝不放大音柱
+        let barWidth: CGFloat = 3.0
+        let baseSpacing: CGFloat = 2.0
+        let maxCount = 45
+        let count = min(maxCount, max(4, Int(contentWidth / (barWidth + baseSpacing))))
+        let amplitudes = amplitudeBars(raw, count: count)
+
+        let used = CGFloat(count) * barWidth + CGFloat(count - 1) * baseSpacing
+        let extraGap = max(0, contentWidth - used) / CGFloat(max(1, count - 1))
+        let spacing = baseSpacing + extraGap
+
+        let midY = size.height / 2
+        let maxHalf = size.height / 2 - 2
         let minHalf: CGFloat = 2
-        let spacing: CGFloat = 2
-        let barWidth = max(1, (size.width - spacing * CGFloat(barCount - 1)) / CGFloat(barCount))
 
         var path = Path()
         for (index, amplitude) in amplitudes.enumerated() {
             let half = max(CGFloat(amplitude) * maxHalf, minHalf)
-            let x = CGFloat(index) * (barWidth + spacing)
+            let x = inset + CGFloat(index) * (barWidth + spacing)
             let rect = CGRect(x: x, y: midY - half, width: barWidth, height: max(half * 2, 1))
             path.addRoundedRect(in: rect, cornerSize: CGSize(width: barWidth / 2, height: barWidth / 2))
         }
