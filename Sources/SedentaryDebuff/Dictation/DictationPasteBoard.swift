@@ -41,10 +41,70 @@ enum DictationPasteBoard {
         }
     }
 
+    // MARK: - 无障碍菜单粘贴
+
+    private static func attribute(_ element: AXUIElement, _ name: String) -> CFTypeRef? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, name as CFString, &value) == .success else { return nil }
+        return value
+    }
+
+    private static func copyElements(_ element: AXUIElement, _ name: String) -> [AXUIElement]? {
+        guard let value = attribute(element, name), CFGetTypeID(value) == CFArrayGetTypeID() else { return nil }
+        return value as? [AXUIElement]
+    }
+
+    /// 递归在目标 App 的菜单栏里找「粘贴 / Paste」菜单项。
+    private static func pasteMenuItem(in element: AXUIElement, depth: Int) -> AXUIElement? {
+        guard depth < 6, let children = copyElements(element, kAXChildrenAttribute) else { return nil }
+        for child in children {
+            let title = (attribute(child, kAXTitleAttribute) as? String ?? "").lowercased()
+            if (attribute(child, kAXRoleAttribute) as? String) == kAXMenuItemRole,
+               title.contains("paste") || title.contains("粘贴") {
+                return child
+            }
+            if let found = pasteMenuItem(in: child, depth: depth + 1) {
+                return found
+            }
+        }
+        return nil
+    }
+
+    /// 若前台 App 菜单栏里有可用的「编辑→粘贴」，就点它执行粘贴。
+    /// Electron/Chromium 类应用（飞书、各类浏览器）不吃注入的 ⌘V，但一定响应自己的菜单命令。
+    /// 返回是否按下成功；找不到或不可用返回 false，由调用方退回 ⌘V。
+    private static func pressFrontmostPasteMenu() -> Bool {
+        guard let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier else { return false }
+        let app = AXUIElementCreateApplication(pid)
+        guard let menuBar = attribute(app, kAXMenuBarAttribute), CFGetTypeID(menuBar) == AXUIElementGetTypeID() else {
+            CrashLog.write("[\(Date())] 粘贴：菜单路径无菜单栏\n")
+            return false
+        }
+        guard let item = pasteMenuItem(in: menuBar as! AXUIElement, depth: 0) else {
+            CrashLog.write("[\(Date())] 粘贴：菜单路径找不到 Paste 菜单项\n")
+            return false
+        }
+        let enabled = attribute(item, kAXEnabledAttribute) as? Bool ?? true
+        guard enabled else {
+            CrashLog.write("[\(Date())] 粘贴：菜单路径 Paste 项不可用\n")
+            return false
+        }
+        return AXUIElementPerformAction(item, kAXPressAction as CFString) == .success
+    }
+
+    /// 先写剪贴板，再按前台 App 的「编辑→粘贴」菜单；菜单不可用时退回注入 ⌘V。
     static func paste(_ text: String) {
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         pasteboard.setString(text, forType: .string)
+        let trusted = isAccessibilityTrusted
+        let front = NSWorkspace.shared.frontmostApplication
+        let bundle = front?.bundleIdentifier ?? "?"
+        if trusted, pressFrontmostPasteMenu() {
+            CrashLog.write("[\(Date())] 粘贴：菜单栏 Paste 生效（front=\(bundle)）\n")
+            return
+        }
+        CrashLog.write("[\(Date())] 粘贴：注入 ⌘V（trusted=\(trusted) front=\(bundle)）\n")
         tapKey(9, flags: .maskCommand, characters: "v")
     }
 
