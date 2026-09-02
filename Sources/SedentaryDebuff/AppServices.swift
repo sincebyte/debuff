@@ -8,6 +8,7 @@ final class AppServices: ObservableObject {
     let feishu: FeishuDebuffMonitor
     let debuffHUDVisibility: DebuffHUDVisibility
     let panelBridge: DebuffPanelBridge
+    let dictation: DictationController
 
     private var screenUnlockObserver: NSObjectProtocol?
 
@@ -21,6 +22,7 @@ final class AppServices: ObservableObject {
         feishu = f
         debuffHUDVisibility = v
         panelBridge = DebuffPanelBridge(monitor: m, weChat: w, feishu: f, debuffHUDVisibility: v)
+        dictation = DictationController(settings: DictationSettings())
 
         screenUnlockObserver = DistributedNotificationCenter.default().addObserver(
             forName: Notification.Name("com.apple.screenIsUnlocked"),

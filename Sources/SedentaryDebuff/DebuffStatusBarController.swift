@@ -27,6 +27,17 @@ final class DebuffStatusBarController: NSObject, NSMenuDelegate {
     private var itemFeishuStatus: NSMenuItem!
     private var itemHUD: NSMenuItem!
 
+    private var itemDictationToggle: NSMenuItem!
+    private var itemDictationStatus: NSMenuItem!
+    private var itemDictationPasteLive: NSMenuItem!
+    private var itemDictationPasteEnd: NSMenuItem!
+    private var itemDictationURL: NSMenuItem!
+    private var itemDictationHotkey: NSMenuItem!
+    private var pauseOptionItems: [NSMenuItem] = []
+    private var maxSegmentItems: [NSMenuItem] = []
+    private var activeOpacityItems: [NSMenuItem] = []
+    private var hotkeyPresetItems: [NSMenuItem] = []
+
     private var updateTimer: AnyCancellable?
     private var dataCancellables = Set<AnyCancellable>()
 
@@ -163,6 +174,8 @@ final class DebuffStatusBarController: NSObject, NSMenuDelegate {
         itemHUD.toolTip = "关闭时隐藏屏幕上的微信 / 飞书 / 久坐 debuff 浮窗，不影响菜单栏图标与计时逻辑。"
         rootMenu.addItem(itemHUD)
 
+        buildDictationSection()
+
         rootMenu.addItem(NSMenuItem(
             title: "退出",
             action: #selector(quit),
@@ -170,10 +183,106 @@ final class DebuffStatusBarController: NSObject, NSMenuDelegate {
         ).apply { $0.target = self })
     }
 
+    private func buildDictationSection() {
+        let d = services.dictation
+        let s = d.settings
+
+        rootMenu.addItem(NSMenuItem.separator())
+        addHeader("语音输入")
+
+        itemDictationToggle = NSMenuItem(title: dictationToggleTitle, action: #selector(toggleDictation), keyEquivalent: "")
+        itemDictationToggle.target = self
+        rootMenu.addItem(itemDictationToggle)
+
+        itemDictationStatus = makeDisabled("")
+        rootMenu.addItem(itemDictationStatus)
+
+        let settingsMenu = NSMenu()
+
+        settingsMenu.addItem(subHeader("粘贴方式"))
+        itemDictationPasteLive = NSMenuItem(title: "实时（边说边粘）", action: #selector(selectPasteMode(_:)), keyEquivalent: "")
+        itemDictationPasteLive.target = self
+        itemDictationPasteLive.representedObject = true
+        itemDictationPasteLive.state = s.livePaste ? .on : .off
+        settingsMenu.addItem(itemDictationPasteLive)
+        itemDictationPasteEnd = NSMenuItem(title: "结束后统一粘贴", action: #selector(selectPasteMode(_:)), keyEquivalent: "")
+        itemDictationPasteEnd.target = self
+        itemDictationPasteEnd.representedObject = false
+        itemDictationPasteEnd.state = s.livePaste ? .off : .on
+        settingsMenu.addItem(itemDictationPasteEnd)
+
+        settingsMenu.addItem(subHeader("停顿判定（秒）"))
+        for v in DictationSettings.pausePresets {
+            let it = NSMenuItem(title: String(format: "%.1f 秒", v), action: #selector(selectPause(_:)), keyEquivalent: "")
+            it.target = self
+            it.representedObject = NSNumber(value: v)
+            it.state = abs(v - s.pauseSilenceSeconds) < 0.0001 ? .on : .off
+            settingsMenu.addItem(it)
+            pauseOptionItems.append(it)
+        }
+
+        settingsMenu.addItem(subHeader("最大切段（秒）"))
+        for v in DictationSettings.maxSegmentPresets {
+            let it = NSMenuItem(title: "\(Int(v)) 秒", action: #selector(selectMaxSegment(_:)), keyEquivalent: "")
+            it.target = self
+            it.representedObject = NSNumber(value: v)
+            it.state = abs(v - s.maxSegmentSeconds) < 0.0001 ? .on : .off
+            settingsMenu.addItem(it)
+            maxSegmentItems.append(it)
+        }
+
+        settingsMenu.addItem(subHeader("激活状态透明度"))
+        for v in DictationSettings.activeOpacityPresets {
+            let it = NSMenuItem(title: String(format: "%.2f", v), action: #selector(selectActiveOpacity(_:)), keyEquivalent: "")
+            it.target = self
+            it.representedObject = NSNumber(value: v)
+            it.state = abs(v - s.activeOpacity) < 0.0001 ? .on : .off
+            settingsMenu.addItem(it)
+            activeOpacityItems.append(it)
+        }
+
+        settingsMenu.addItem(subHeader("STT 服务地址"))
+        itemDictationURL = makeDisabled(s.sttURLString)
+        settingsMenu.addItem(itemDictationURL)
+        settingsMenu.addItem(NSMenuItem(title: "输入地址…", action: #selector(editSTTURL), keyEquivalent: "").apply { $0.target = self })
+        settingsMenu.addItem(NSMenuItem(title: "恢复默认", action: #selector(resetSTTURL), keyEquivalent: "").apply { $0.target = self })
+
+        settingsMenu.addItem(subHeader("快捷键"))
+        itemDictationHotkey = makeDisabled(DictationHotKey.label(keyCode: s.hotkeyKeyCode, flags: s.hotkeyFlags))
+        settingsMenu.addItem(itemDictationHotkey)
+        for p in DictationHotKey.presets {
+            let it = NSMenuItem(title: p.label, action: #selector(selectHotkey(_:)), keyEquivalent: "")
+            it.target = self
+            it.representedObject = p
+            it.state = (p.keyCode == s.hotkeyKeyCode && p.flags == s.hotkeyFlags) ? .on : .off
+            settingsMenu.addItem(it)
+            hotkeyPresetItems.append(it)
+        }
+
+        let settingsParent = NSMenuItem(title: "设置", action: nil, keyEquivalent: "")
+        settingsParent.submenu = settingsMenu
+        rootMenu.addItem(settingsParent)
+
+        rootMenu.addItem(NSMenuItem(title: "测试服务连接", action: #selector(testDictationConnection), keyEquivalent: "").apply { $0.target = self })
+        rootMenu.addItem(NSMenuItem(title: "辅助功能设置…", action: #selector(openAccessibilitySettings), keyEquivalent: "").apply { $0.target = self })
+    }
+
+    private var dictationToggleTitle: String {
+        let d = services.dictation
+        let hotkey = DictationHotKey.label(keyCode: d.settings.hotkeyKeyCode, flags: d.settings.hotkeyFlags)
+        return d.isRecording ? "停止语音输入（\(hotkey)）" : "开始语音输入（\(hotkey)）"
+    }
+
     private func addHeader(_ t: String) {
         let i = NSMenuItem(title: t, action: nil, keyEquivalent: "")
         i.isEnabled = false
         rootMenu.addItem(i)
+    }
+
+    private func subHeader(_ t: String) -> NSMenuItem {
+        let i = NSMenuItem(title: t, action: nil, keyEquivalent: "")
+        i.isEnabled = false
+        return i
     }
 
     // MARK: - 阈值
@@ -269,6 +378,85 @@ final class DebuffStatusBarController: NSObject, NSMenuDelegate {
         services.debuffHUDVisibility.isEnabled.toggle()
     }
 
+    @objc private func toggleDictation() {
+        services.dictation.toggle()
+    }
+
+    @objc private func selectPasteMode(_ sender: NSMenuItem) {
+        let live = (sender.representedObject as? Bool) ?? true
+        services.dictation.settings.livePaste = live
+        refreshDictationItems()
+    }
+
+    @objc private func selectPause(_ sender: NSMenuItem) {
+        guard let n = sender.representedObject as? NSNumber else { return }
+        services.dictation.settings.pauseSilenceSeconds = n.doubleValue
+        refreshDictationItems()
+    }
+
+    @objc private func selectMaxSegment(_ sender: NSMenuItem) {
+        guard let n = sender.representedObject as? NSNumber else { return }
+        services.dictation.settings.maxSegmentSeconds = n.doubleValue
+        refreshDictationItems()
+    }
+
+    @objc private func selectActiveOpacity(_ sender: NSMenuItem) {
+        guard let n = sender.representedObject as? NSNumber else { return }
+        services.dictation.settings.activeOpacity = n.doubleValue
+        services.dictation.applyActiveOpacity()
+        refreshDictationItems()
+    }
+
+    @objc private func selectHotkey(_ sender: NSMenuItem) {
+        guard let preset = sender.representedObject as? DictationHotKey.Preset else { return }
+        services.dictation.settings.hotkeyKeyCode = preset.keyCode
+        services.dictation.settings.hotkeyFlags = preset.flags
+        services.dictation.applyHotkey()
+        refreshDictationItems()
+    }
+
+    @objc private func editSTTURL() {
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.messageText = "输入 STT 服务地址"
+        alert.informativeText = "OpenAI 兼容的转写接口完整 URL，例如：\(DictationSettings.defaultURL)"
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 420, height: 24))
+        field.stringValue = services.dictation.settings.sttURLString
+        alert.accessoryView = field
+        alert.addButton(withTitle: "确定")
+        alert.addButton(withTitle: "取消")
+        if alert.runModal() == .alertFirstButtonReturn {
+            let value = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !value.isEmpty {
+                services.dictation.settings.sttURLString = value
+            }
+        }
+        refreshDictationItems()
+    }
+
+    @objc private func resetSTTURL() {
+        services.dictation.settings.sttURLString = DictationSettings.defaultURL
+        refreshDictationItems()
+    }
+
+    @objc private func testDictationConnection() {
+        NSApp.activate(ignoringOtherApps: true)
+        services.dictation.checkConnection { ok, message in
+            let alert = NSAlert()
+            alert.messageText = ok ? "连接正常" : "连接失败"
+            alert.informativeText = message
+            alert.addButton(withTitle: "好")
+            alert.runModal()
+        }
+    }
+
+    @objc private func openAccessibilitySettings() {
+        let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
+        if let url {
+            NSWorkspace.shared.open(url)
+        }
+    }
+
     @objc private func quit() {
         NSApp.terminate(nil)
     }
@@ -338,6 +526,35 @@ final class DebuffStatusBarController: NSObject, NSMenuDelegate {
         refreshWeChatIconBlock()
         refreshFeishuIconBlock()
         itemHUD.setOn(services.debuffHUDVisibility.isEnabled, checkmark: true)
+        refreshDictationItems()
+    }
+
+    private func refreshDictationItems() {
+        guard itemDictationToggle != nil else { return }
+        let d = services.dictation
+        let s = d.settings
+        itemDictationToggle.title = dictationToggleTitle
+        itemDictationStatus.title = d.statusText
+        itemDictationURL.title = s.sttURLString
+        itemDictationHotkey.title = DictationHotKey.label(keyCode: s.hotkeyKeyCode, flags: s.hotkeyFlags)
+        itemDictationPasteLive.state = s.livePaste ? .on : .off
+        itemDictationPasteEnd.state = s.livePaste ? .off : .on
+        for it in pauseOptionItems {
+            guard let n = it.representedObject as? NSNumber else { continue }
+            it.state = abs(n.doubleValue - s.pauseSilenceSeconds) < 0.0001 ? .on : .off
+        }
+        for it in maxSegmentItems {
+            guard let n = it.representedObject as? NSNumber else { continue }
+            it.state = abs(n.doubleValue - s.maxSegmentSeconds) < 0.0001 ? .on : .off
+        }
+        for it in activeOpacityItems {
+            guard let n = it.representedObject as? NSNumber else { continue }
+            it.state = abs(n.doubleValue - s.activeOpacity) < 0.0001 ? .on : .off
+        }
+        for it in hotkeyPresetItems {
+            guard let preset = it.representedObject as? DictationHotKey.Preset else { continue }
+            it.state = (preset.keyCode == s.hotkeyKeyCode && preset.flags == s.hotkeyFlags) ? .on : .off
+        }
     }
 
     private func bindData() {
@@ -346,6 +563,7 @@ final class DebuffStatusBarController: NSObject, NSMenuDelegate {
             .autoconnect()
             .sink { [weak self] _ in
                 self?.refreshStatusLineItems()
+                self?.refreshDictationItems()
             }
         // 监听阈值（例如 HUD 里清除导致 session 等），父项/对勾
         services.monitor.$thresholdMinutes

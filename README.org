@@ -1,0 +1,74 @@
+#+title: debuff
+#+author: van
+#+date: 2026-09-02
+
+macOS 原生菜单栏小工具（Swift），三合一：
+
+- **久坐计时**：超过阈值弹出仿魔兽 debuff 浮窗（外框 + 图标 + 计时）。
+- **微信 / 飞书未读**：读取 Dock 角标，未读达到阈值时同样弹出 debuff 浮窗。
+- **语音输入**：全局快捷键唤起麦克风录音，本地 STT 服务实时转写并粘贴到光标处，带实时波形指示条。
+
+* 软件说明
+
+菜单栏图标常驻；点击后出现设置菜单，可调整久坐阈值、自定义图标、语音输入各项参数。
+
+* 语音输入
+
+按下全局快捷键（默认 =l= ⌥D），打开系统默认麦克风开始录音；停顿达到设定时间（默认 1 秒）或单段超过最大时长（默认 10 秒）自动切段，每段由本地 STT 服务转写后粘贴到**当前光标位置**（「边说边粘」模式，默认开启）；再按一次结束并把最后残段收尾。
+
+- **波形指示条**：一个圆角边框的常驻悬浮小窗，激活（录音）时按设定透明度显示一排竖条随音量跳动，空闲时淡色静态显示；可用鼠标拖拽移动，位置自动保存。
+- **快捷键**：默认 =⌥D=，可在菜单「语音输入 → 设置 → 快捷键」中更换。
+- **STT 服务地址**：默认 =http://127.0.0.1:8001/v1/audio/transcriptions=，OpenAI 兼容接口（multipart =file= 字段，返回 ={"text": "..."}=），可在菜单中自定义。菜单「测试服务连接」可检测连通性。
+- **粘贴方式**：默认「实时（边说边粘）」，可改为「结束后统一粘贴」。
+- **激活状态透明度**：可在菜单中设置（0.50 / 0.65 / 0.80 / 1.00）。
+
+* 环境要求
+
+- macOS 13 或更高版本
+- Swift 5.9+（随 Xcode 或 Command Line Tools 安装）
+- 本地 STT 服务（funasr-llamacpp + FSMN-VAD，:persistent: 常驻），示例见 =~/Desktop/foucs/funasr-llamacpp/= 的 README / =start-funasr-server.sh=
+
+* 权限要求
+
+使用 =scripts/package-macos-app.sh= 打包成 =.app= 后运行（直接用 =swift run= 跑裸可执行文件时权限提示可能无法正常弹出）。
+
+- **麦克风**：语音输入录音用，首次使用系统弹窗授权。
+- **辅助功能**：读取输入光标位置 + 模拟 =⌘V= 粘贴。未授权时录音前会弹出醒目提示并引导到系统设置。
+
+* 编译与运行
+
+#+begin_src bash
+  cd /path/to/debuff
+  swift build -c release
+  ./.build/release/SedentaryDebuff
+#+end_src
+
+打包成标准 =.app=（可拖入「应用程序」）：
+
+#+begin_src bash
+  ./scripts/package-macos-app.sh   # 产物 dist/debuff.app
+  cp -R dist/debuff.app /Applications/
+#+end_src
+
+用 Xcode 打开 =Package.swift= 亦可直接编译运行。
+
+* 配置持久化
+
+久坐阈值、图标路径、语音输入各参数（STT 地址、快捷键、粘贴模式、停顿/最大切段、激活透明度、波形位置）均保存在本机 =UserDefaults= 中。
+
+* 目录结构
+
+- =Sources/SedentaryDebuff/= 主代码
+  - =SedentaryDebuffApp.swift= / =SedentaryDebuffAppDelegate.swift= 应用入口
+  - =SedentaryMonitor.swift= 久坐计时
+  - =WeChatDebuffMonitor.swift= / =FeishuDebuffMonitor.swift= 未读监控
+  - =DebuffStatusBarController.swift= 菜单栏与设置菜单
+  - =Dictation/= 语音输入模块（快捷键、录音、分段、STT 上传、粘贴、波形面板、光标定位）
+  - =CrashLog.swift= 崩溃日志（写入 =~/Library/Logs/SedentaryDebuff_crash.log=）
+- =scripts/package-macos-app.sh= 打包脚本
+- =App/= 打包用的 =Info.plist=、图标与资源
+
+* 版本记录
+
+- v1.0：久坐 debuff 浮窗
+- 语音输入：全局快捷键录音 → 本地 STT 转写 → 粘贴到光标；波形指示条（常驻、可拖拽、激活/空闲透明度区分）

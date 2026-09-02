@@ -28,6 +28,10 @@
 	<true/>
 	<key>NSHumanReadableCopyright</key>
 	<string></string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>用于语音输入功能：按下快捷键后通过系统默认麦克风录音并转写为文字。</string>
+	<key>NSAccessibilityUsageDescription</key>
+	<string>用于语音输入功能：把转写出的文字粘贴到当前光标位置（模拟 Command+V）。</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
 </dict>
