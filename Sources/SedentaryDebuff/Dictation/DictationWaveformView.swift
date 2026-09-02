@@ -8,7 +8,10 @@ struct DictationWaveformView: View {
     private let displaySeconds = 0.6
     private let gain: Float = 15.0
     private let noiseFloor: Float = 0.001
-    private let idleOpacity = 0.0
+    /// 非激活(待命)状态的整体透明度：控件不再隐藏，常驻可见。
+    private let standbyOpacity = 0.6
+    private let activeBarColor = Color(red: 0.3, green: 0.92, blue: 0.6)
+    private let standbyBarColor = Color(red: 0.72, green: 0.72, blue: 0.75)
 
     private let timer = Timer.publish(every: 0.033, on: .main, in: .common).autoconnect()
 
@@ -22,16 +25,15 @@ struct DictationWaveformView: View {
                     .stroke(Color(red: 65.0 / 255.0, green: 65.0 / 255.0, blue: 67.0 / 255.0), lineWidth: 0.5)
                 Canvas { context, size in
                     let _ = tick
-                    if state.isActive {
-                        drawBars(in: &context, size: size)
-                    }
+                    drawBars(in: &context, size: size)
                 }
             }
         }
-        .opacity(state.isActive ? state.activeOpacity : idleOpacity)
+        .opacity(state.isActive ? state.activeOpacity : standbyOpacity)
         .animation(.easeInOut(duration: 0.2), value: state.isActive)
         .onReceive(timer) { _ in
-            guard state.isActive else { return }
+            // 激活或待命监听期间持续刷新，让音柱随音频实时跳动（激活绿 / 待命灰）。
+            guard state.isActive || state.isListening else { return }
             tick += 1
         }
     }
@@ -56,8 +58,9 @@ struct DictationWaveformView: View {
         let spacing = baseSpacing + extraGap
 
         let midY = size.height / 2
-        let maxHalf = size.height / 2 - 2
-        let minHalf: CGFloat = 2
+        // 两端圆角内弧形区域容纳不了太高柱子，缩短到半高的 50% 以内，避免超出边框
+        let maxHalf = max(3, size.height * 0.25)
+        let minHalf: CGFloat = 1.5
 
         var path = Path()
         for (index, amplitude) in amplitudes.enumerated() {
@@ -66,7 +69,7 @@ struct DictationWaveformView: View {
             let rect = CGRect(x: x, y: midY - half, width: barWidth, height: max(half * 2, 1))
             path.addRoundedRect(in: rect, cornerSize: CGSize(width: barWidth / 2, height: barWidth / 2))
         }
-        context.fill(path, with: .color(Color(red: 0.3, green: 0.92, blue: 0.6)))
+        context.fill(path, with: .color(state.isActive ? activeBarColor : standbyBarColor))
     }
 
     private func amplitudeBars(_ samples: [Float], count: Int) -> [Float] {

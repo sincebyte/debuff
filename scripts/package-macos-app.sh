@@ -54,9 +54,15 @@ sips -z 256 256 "$APP_ICON_SRC" --out "$ICONSET/icon_256x256.png" >/dev/null
 sips -z 512 512 "$APP_ICON_SRC" --out "$ICONSET/icon_256x256@2x.png" >/dev/null
 sips -z 512 512 "$APP_ICON_SRC" --out "$ICONSET/icon_512x512.png" >/dev/null
 sips -z 1024 1024 "$APP_ICON_SRC" --out "$ICONSET/icon_512x512@2x.png" >/dev/null
-iconutil -c icns "$ICONSET" -o "$ICON_TMP/AppIcon.icns"
+iconutil -c icns "$ICONSET" -o "$ICON_TMP/AppIcon.icns" 2>/dev/null \
+	|| echo "warning: iconutil failed; skipping app icon" || true
 mkdir -p "$APP_PATH/Contents/Resources"
-cp "$ICON_TMP/AppIcon.icns" "$APP_PATH/Contents/Resources/AppIcon.icns"
+if [[ -f "$ICON_TMP/AppIcon.icns" ]]; then
+	cp "$ICON_TMP/AppIcon.icns" "$APP_PATH/Contents/Resources/AppIcon.icns"
+else
+	# 图标缺失时移除 plist 引用，避免空引用
+	/usr/libexec/PlistBuddy -c "Delete :CFBundleIconFile" "$APP_PATH/Contents/Info.plist" 2>/dev/null || true
+fi
 
 echo "==> ad-hoc codesign"
 if command -v codesign >/dev/null 2>&1; then

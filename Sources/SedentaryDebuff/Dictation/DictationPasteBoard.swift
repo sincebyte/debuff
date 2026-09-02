@@ -21,17 +21,48 @@ enum DictationPasteBoard {
         }
     }
 
+    /// 在当前焦点处按下并松开某个组合键。
+    /// 补齐字符信息并留按键间隔，贴近真实按键，避免被目标应用忽略。
+    private static func tapKey(_ virtualKey: CGKeyCode, flags: CGEventFlags, characters: String = "") {
+        guard let source = CGEventSource(stateID: .combinedSessionState) else { return }
+        let keyDown = CGEvent(keyboardEventSource: source, virtualKey: virtualKey, keyDown: true)
+        keyDown?.flags = flags
+        if !characters.isEmpty {
+            let utf16 = Array(characters.utf16)
+            utf16.withUnsafeBufferPointer { buffer in
+                keyDown?.keyboardSetUnicodeString(stringLength: buffer.count, unicodeString: buffer.baseAddress!)
+            }
+        }
+        keyDown?.post(tap: .cghidEventTap)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
+            let keyUp = CGEvent(keyboardEventSource: source, virtualKey: virtualKey, keyDown: false)
+            keyUp?.flags = flags
+            keyUp?.post(tap: .cghidEventTap)
+        }
+    }
+
     static func paste(_ text: String) {
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         pasteboard.setString(text, forType: .string)
+        tapKey(9, flags: .maskCommand, characters: "v")
+    }
 
-        guard let source = CGEventSource(stateID: .combinedSessionState) else { return }
-        let keyDown = CGEvent(keyboardEventSource: source, virtualKey: 9, keyDown: true)
-        keyDown?.flags = .maskCommand
-        keyDown?.post(tap: .cghidEventTap)
-        let keyUp = CGEvent(keyboardEventSource: source, virtualKey: 9, keyDown: false)
-        keyUp?.flags = .maskCommand
-        keyUp?.post(tap: .cghidEventTap)
+    /// 在当前焦点处敲一次回车，把输入框里的内容提交/发送出去。
+    static func pressReturn() {
+        tapKey(36, flags: [], characters: "\r")
+    }
+
+    /// 在当前焦点处按一次 ⌥⌫，删除光标前的一个词（macOS 原生删词快捷键）。
+    static func pressDeleteWord() {
+        tapKey(51, flags: .maskAlternate)
+    }
+
+    /// 清空当前输入框全部内容：⌘A 全选后按 ⌫ 删除。
+    static func pressClearAll() {
+        tapKey(0, flags: .maskCommand, characters: "a")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+            tapKey(51, flags: [])
+        }
     }
 }

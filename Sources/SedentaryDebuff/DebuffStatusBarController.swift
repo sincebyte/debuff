@@ -29,6 +29,7 @@ final class DebuffStatusBarController: NSObject, NSMenuDelegate {
 
     private var itemDictationToggle: NSMenuItem!
     private var itemDictationStatus: NSMenuItem!
+    private var itemDictationHint: NSMenuItem!
     private var itemDictationPasteLive: NSMenuItem!
     private var itemDictationPasteEnd: NSMenuItem!
     private var itemDictationURL: NSMenuItem!
@@ -198,6 +199,10 @@ final class DebuffStatusBarController: NSObject, NSMenuDelegate {
         itemDictationStatus = makeDisabled("")
         rootMenu.addItem(itemDictationStatus)
 
+        itemDictationHint = makeDisabled("说「输入/激活」开始 ·「over」待命 ·「发送」回车")
+        itemDictationHint.toolTip = "语音指令仅在全句命中时生效。快捷键 \(DictationHotKey.label(keyCode: s.hotkeyKeyCode, flags: s.hotkeyFlags)) 用于在激活/非激活之间切换；上方菜单项负责开启/关停麦克风。"
+        rootMenu.addItem(itemDictationHint)
+
         let settingsMenu = NSMenu()
 
         settingsMenu.addItem(subHeader("粘贴方式"))
@@ -279,9 +284,7 @@ final class DebuffStatusBarController: NSObject, NSMenuDelegate {
     }
 
     private var dictationToggleTitle: String {
-        let d = services.dictation
-        let hotkey = DictationHotKey.label(keyCode: d.settings.hotkeyKeyCode, flags: d.settings.hotkeyFlags)
-        return d.isRecording ? "停止语音输入（\(hotkey)）" : "开始语音输入（\(hotkey)）"
+        services.dictation.isEngineOn ? "停止语音输入" : "开始语音输入"
     }
 
     private func addHeader(_ t: String) {
@@ -390,7 +393,7 @@ final class DebuffStatusBarController: NSObject, NSMenuDelegate {
     }
 
     @objc private func toggleDictation() {
-        services.dictation.toggle()
+        services.dictation.startStop()
     }
 
     @objc private func selectPasteMode(_ sender: NSMenuItem) {

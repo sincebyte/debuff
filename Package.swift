@@ -8,6 +8,8 @@ let package = Package(
     ],
     products: [
         .executable(name: "SedentaryDebuff", targets: ["SedentaryDebuff"]),
+        .executable(name: "CaretProbe", targets: ["CaretProbe"]),
+        .executable(name: "VoiceIME", targets: ["VoiceIME"]),
     ],
     targets: [
         .executableTarget(
@@ -17,6 +19,14 @@ let package = Package(
                 .process("Resources"),
                 .copy("../../App/appicon.png"),
             ]
+        ),
+        .executableTarget(
+            name: "CaretProbe",
+            path: "Sources/CaretProbe"
+        ),
+        .executableTarget(
+            name: "VoiceIME",
+            path: "Sources/VoiceIME"
         ),
     ]
 )

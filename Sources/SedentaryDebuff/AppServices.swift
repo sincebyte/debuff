@@ -10,6 +10,7 @@ final class AppServices: ObservableObject {
     let panelBridge: DebuffPanelBridge
     let dictation: DictationController
 
+    private var screenLockObserver: NSObjectProtocol?
     private var screenUnlockObserver: NSObjectProtocol?
 
     init() {
@@ -24,6 +25,13 @@ final class AppServices: ObservableObject {
         panelBridge = DebuffPanelBridge(monitor: m, weChat: w, feishu: f, debuffHUDVisibility: v)
         dictation = DictationController(settings: DictationSettings())
 
+        screenLockObserver = DistributedNotificationCenter.default().addObserver(
+            forName: Notification.Name("com.apple.screenIsLocked"),
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.handleScreenLocked()
+        }
         screenUnlockObserver = DistributedNotificationCenter.default().addObserver(
             forName: Notification.Name("com.apple.screenIsUnlocked"),
             object: nil,
@@ -34,13 +42,22 @@ final class AppServices: ObservableObject {
     }
 
     deinit {
+        if let screenLockObserver {
+            DistributedNotificationCenter.default().removeObserver(screenLockObserver)
+        }
         if let screenUnlockObserver {
             DistributedNotificationCenter.default().removeObserver(screenUnlockObserver)
         }
     }
 
+    private func handleScreenLocked() {
+        // 锁屏即停麦：隐私考虑，麦克风切到关闭态，解锁后再恢复。
+        dictation.handleScreenLock()
+    }
+
     private func handleScreenUnlocked() {
         monitor.clearDebuffAndRestart()
         panelBridge.sync()
+        dictation.handleScreenUnlock()
     }
 }

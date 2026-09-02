@@ -37,6 +37,10 @@ final class DictationWaveformPanel {
         viewState.isActive = active
     }
 
+    func setListening(_ listening: Bool) {
+        viewState.isListening = listening
+    }
+
     func setActiveOpacity(_ value: Double) {
         viewState.activeOpacity = value
     }
