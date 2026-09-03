@@ -57,6 +57,13 @@ final class DictationController: ObservableObject {
         case clear       // 「清空/clear」
     }
 
+    /// 一段转写里识别出的指令：`command` 是要执行的动作；`body` 仅「发送」贴在
+    /// 正文末尾命中时才有值，即命令词前面的正文，随发送一起落盘。
+    private struct CommandMatch {
+        let command: VoiceCommand
+        let body: String?
+    }
+
     init(settings: DictationSettings) {
         self.settings = settings
         waveformPanel = DictationWaveformPanel(data: waveformData)
@@ -492,8 +499,13 @@ final class DictationController: ObservableObject {
     private func handleTranscribed(_ text: String) {
         switch currentState {
         case .active:
-            if let command = Self.detectCommand(text) {
-                perform(command)
+            if let match = Self.detectCommand(text) {
+                // 「发送」贴在句子末尾命中时，先把命令词前面的正文加入积压，
+                // 发送流程会把积压内容全部粘贴后统一回车。
+                if let body = match.body {
+                    unpasted.append(body)
+                }
+                perform(match.command)
             } else {
                 unpasted.append(text)
                 if settings.livePaste {
@@ -514,20 +526,24 @@ final class DictationController: ObservableObject {
         }
     }
 
-    /// 整段转写文本去掉首尾空白、标点并忽略大小写后，恰好等于某个指令词。
-    private static func detectCommand(_ text: String) -> VoiceCommand? {
-        switch normalizedCommand(text) {
+    /// 语音指令识别：整段转写文本去掉首尾空白、标点并忽略大小写后，恰好等于某个指令词。
+    /// 「发送」例外：允许贴在句子末尾——去掉 STT 自动追加的尾随标点后，末两字为「发送」
+    /// 即视为发送指令（不必单独说「发送」），前面的正文作为 body 随发送一起上屏。
+    private static func detectCommand(_ text: String) -> CommandMatch? {
+        let normalized = normalizedCommand(text)
+        switch normalized {
         case "over":
-            return .deactivate
-        case "发送":
-            return .send
+            return CommandMatch(command: .deactivate, body: nil)
         case "删除", "撤销":
-            return .deleteWord
+            return CommandMatch(command: .deleteWord, body: nil)
         case "清空", "clear":
-            return .clear
+            return CommandMatch(command: .clear, body: nil)
         default:
-            return nil
+            break
         }
+        guard normalized.hasSuffix("发送") else { return nil }
+        let body = String(normalized.dropLast(2))
+        return CommandMatch(command: .send, body: body.isEmpty ? nil : body)
     }
 
     private static func normalizedCommand(_ text: String) -> String {
