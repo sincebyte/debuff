@@ -41,6 +41,8 @@ final class DictationController: ObservableObject {
 
     private var pasteQueue: [String] = []
     private var pasteBusy = false
+    /// 引擎因输入/输出硬件变化（切换麦克风等）自行 stop 时回调，用于原地续麦。
+    private var engineConfigChangeObserver: NSObjectProtocol?
 
     private let waveformData = DictationWaveformData()
     private let waveformPanel: DictationWaveformPanel
@@ -65,6 +67,15 @@ final class DictationController: ObservableObject {
                 self.process(buffer: buffer)
             }
         }
+        engineConfigChangeObserver = NotificationCenter.default.addObserver(
+            forName: .AVAudioEngineConfigurationChange,
+            object: recorder.audioEngine,
+            queue: nil
+        ) { [weak self] _ in
+            self?.engineQueue.async {
+                self?.handleEngineConfigurationChange()
+            }
+        }
         applyHotkey()
         waveformPanel.setActiveOpacity(settings.activeOpacity)
         waveformPanel.onWidthChange = { [weak self] width in
@@ -78,6 +89,9 @@ final class DictationController: ObservableObject {
     }
 
     deinit {
+        if let engineConfigChangeObserver {
+            NotificationCenter.default.removeObserver(engineConfigChangeObserver)
+        }
         DictationHotKey.unregister()
     }
 
@@ -336,6 +350,34 @@ final class DictationController: ObservableObject {
                 self.enqueuePaste(text)
             }
         }
+    }
+
+    // MARK: - 硬件变化（切换输入设备）
+
+    /// 输入/输出硬件变化（如切换麦克风）时引擎被系统自行 stop，inputNode 上残留旧 tap。
+    /// 非关闭态下按原状态原地续麦，避免下一次启动时 installTap 撞上残留 tap 而崩溃。
+    private func handleEngineConfigurationChange() {
+        guard currentState == .active || currentState == .inactive else { return }
+        CrashLog.write("[\(Date())] 输入设备变化：引擎被系统停止，原地续麦 state=\(currentState)\n")
+        segmentSamples.removeAll()
+        segmentStart = nil
+        vad.reset()
+        do {
+            try recorder.start()
+        } catch {
+            CrashLog.write("[\(Date())] 输入设备变化后重启麦克风失败：\(error.localizedDescription)\n")
+            currentState = .off
+            setState(.off)
+            setStatus("切换输入设备后重启麦克风失败：\(error.localizedDescription)")
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.waveformPanel.setActive(false)
+                self.waveformPanel.setListening(false)
+                self.waveformPanel.hide()
+            }
+            return
+        }
+        waveformData.reset(sampleRate: recorder.sampleRate)
     }
 
     // MARK: - 音频处理
