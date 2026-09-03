@@ -75,7 +75,7 @@ final class DictationController: ObservableObject {
         }
         engineConfigChangeObserver = NotificationCenter.default.addObserver(
             forName: .AVAudioEngineConfigurationChange,
-            object: recorder.audioEngine,
+            object: nil,
             queue: nil
         ) { [weak self] _ in
             self?.engineQueue.async {
@@ -365,9 +365,13 @@ final class DictationController: ObservableObject {
 
     // MARK: - 硬件变化（切换输入设备）
 
-    /// 输入/输出硬件变化（如切换麦克风）时引擎被系统自行 stop，inputNode 上残留旧 tap。
-    /// 非关闭态下按原状态原地续麦，避免下一次启动时 installTap 撞上残留 tap 而崩溃。
+    /// 输入/输出硬件变化（如切换麦克风、锁屏/唤醒）时引擎被系统自行 stop。
+    /// 先重建引擎，让 inputNode 丢弃旧设备的缓存格式、重新绑定当前硬件——
+    /// 否则用过期格式 installTap 会抛 NSException（format mismatch）崩溃。
+    /// 锁屏前的停麦（stopForScreenLock）会先置为 off，此处不会重复续麦。
     private func handleEngineConfigurationChange() {
+        // 无论是否在监听都重建，保证下次 start() 用的是新硬件的格式。
+        recorder.rebuildEngine()
         guard currentState == .active || currentState == .inactive else { return }
         CrashLog.write("[\(Date())] 输入设备变化：引擎被系统停止，原地续麦 state=\(currentState)\n")
         segmentSamples.removeAll()
