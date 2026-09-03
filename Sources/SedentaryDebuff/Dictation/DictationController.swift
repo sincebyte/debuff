@@ -7,7 +7,7 @@ final class DictationController: ObservableObject {
     enum State: Equatable {
         case off       // 引擎关闭：麦克风未开启（空闲，控件隐藏）
         case active    // 激活：语音上屏，删除/清空/over/发送等指令生效
-        case inactive  // 非激活：常驻待命监听，语音不上屏，仅「输入」可唤醒
+        case inactive  // 非激活：待命监听只驱动灰色波形，不切段不转写；仅快捷键重新激活
         case flushing  // 停止引擎时的收尾转写
     }
 
@@ -49,9 +49,8 @@ final class DictationController: ObservableObject {
 
     private static let minSegmentSeconds = 0.5
 
-    /// 识别到的语音指令：每条指令对应一个固定动作。
+    /// 识别到的语音指令（仅激活状态识别）：每条指令对应一个固定动作。
     private enum VoiceCommand {
-        case activate    // 「输入」：非激活 → 激活
         case deactivate  // 「over」：激活 → 非激活
         case send        // 「发送」：回车发送 + 切到非激活
         case deleteWord  // 「删除/撤销」
@@ -107,6 +106,11 @@ final class DictationController: ObservableObject {
 
     var isAccessibilityTrusted: Bool {
         DictationPasteBoard.isAccessibilityTrusted
+    }
+
+    /// 当前快捷键的展示名，用于待命提示文案。
+    private var hotkeyLabel: String {
+        DictationHotKey.label(keyCode: settings.hotkeyKeyCode, flags: settings.hotkeyFlags)
     }
 
     // MARK: - 快捷键 / 引擎开关
@@ -206,7 +210,7 @@ final class DictationController: ObservableObject {
         waveformData.reset(sampleRate: recorder.sampleRate)
         let initial = mode == .active ? State.active : .inactive
         setState(initial)
-        setStatus(initial == .active ? "输入中…" : "待命中（说「输入/激活」开始）")
+        setStatus(initial == .active ? "输入中…" : "待命（按 \(hotkeyLabel) 重新激活）")
         let isActive = initial == .active
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
@@ -237,7 +241,7 @@ final class DictationController: ObservableObject {
             if wasActive {
                 self.flushFinalSegment()
             } else {
-                // 非激活停麦：待命期间说的话本就无意上屏，直接丢弃残留段。
+                // 非激活停麦：待命期间不切段不转写，没有残留段需上屏。
                 self.segmentSamples.removeAll()
                 self.segmentStart = nil
                 self.vad.reset()
@@ -302,7 +306,7 @@ final class DictationController: ObservableObject {
 
     // MARK: - 激活 / 非激活
 
-    /// 非激活 → 激活（语音「输入」或快捷键）。
+    /// 非激活 → 激活（仅快捷键）。
     private func setVoiceActive() {
         guard currentState == .inactive else { return }
         guard recorder.isRunning else {
@@ -342,7 +346,7 @@ final class DictationController: ObservableObject {
         let pendingPaste = unpasted
         unpasted.removeAll()
         setState(.inactive)
-        setStatus("待命中（说「输入/激活」开始）")
+        setStatus("待命（按 \(hotkeyLabel) 重新激活）")
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             self.waveformPanel.setActive(false)
@@ -385,8 +389,10 @@ final class DictationController: ObservableObject {
     private func process(buffer: AVAudioPCMBuffer) {
         let samples = readSamples(buffer)
         guard !samples.isEmpty else { return }
-        segmentSamples.append(contentsOf: samples)
         waveformData.append(samples)
+        // 非激活待命只驱动灰色波形跳动，不做切段/STT 转写，省掉待命期的识别消耗。
+        guard currentState == .active else { return }
+        segmentSamples.append(contentsOf: samples)
         if segmentStart == nil {
             segmentStart = Date()
         }
@@ -482,7 +488,7 @@ final class DictationController: ObservableObject {
         finishIfNeeded()
     }
 
-    /// 按当前状态决定一段转写文本的去向：激活才上屏/执行指令；非激活只识别「输入」。
+    /// 按当前状态决定一段转写文本的去向：激活才上屏/执行指令；其余状态一律不识别唤醒词。
     private func handleTranscribed(_ text: String) {
         switch currentState {
         case .active:
@@ -495,10 +501,9 @@ final class DictationController: ObservableObject {
                 }
             }
         case .inactive:
-            // 非激活：普通语音不上屏；仅唤醒词（输入/激活）可重新激活。
-            if Self.isActivateUtterance(text) {
-                setVoiceActive()
-            }
+            // 非激活待命不切段不转写（见 process()），此处只会收到「激活→非激活」跨越瞬间
+            // 已在途的转写结果，一律丢弃，避免误上屏或误触发。
+            break
         case .flushing:
             // 从激活停止时收尾的文本仍要落盘；从非激活停止时丢弃待命期间的转写。
             if !discardPendingOnStop {
@@ -512,8 +517,6 @@ final class DictationController: ObservableObject {
     /// 整段转写文本去掉首尾空白、标点并忽略大小写后，恰好等于某个指令词。
     private static func detectCommand(_ text: String) -> VoiceCommand? {
         switch normalizedCommand(text) {
-        case "输入", "激活":
-            return .activate
         case "over":
             return .deactivate
         case "发送":
@@ -534,22 +537,9 @@ final class DictationController: ObservableObject {
             .trimmingCharacters(in: .punctuationCharacters)
     }
 
-    /// 非激活时的唤醒判断：单独说出「输入/激活」即可，也容忍 STT 偶发把语气词或周边字并进来。
-    private static func isActivateUtterance(_ text: String) -> Bool {
-        let normalized = normalizedCommand(text)
-        if normalized == "输入" || normalized == "激活" {
-            return true
-        }
-        // STT 合并噪声（如「西湖输入」「激活一下」）：内容较短且含唤醒词也算命中。
-        guard normalized.count <= 6 else { return false }
-        return normalized.contains("输入") || normalized.contains("激活")
-    }
-
     /// 执行识别到的指令（仅激活状态会走到这里）。
     private func perform(_ command: VoiceCommand) {
         switch command {
-        case .activate:
-            break // 已在激活，忽略
         case .deactivate:
             setVoiceInactive()
         case .send:
@@ -589,7 +579,7 @@ final class DictationController: ObservableObject {
         let pendingPaste = unpasted
         unpasted.removeAll()
         setState(.inactive)
-        setStatus("已发送（待命）")
+        setStatus("已发送（按 \(hotkeyLabel) 继续输入）")
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             self.waveformPanel.setActive(false)

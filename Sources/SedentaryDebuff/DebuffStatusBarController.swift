@@ -199,8 +199,8 @@ final class DebuffStatusBarController: NSObject, NSMenuDelegate {
         itemDictationStatus = makeDisabled("")
         rootMenu.addItem(itemDictationStatus)
 
-        itemDictationHint = makeDisabled("说「输入/激活」开始 ·「over」待命 ·「发送」回车")
-        itemDictationHint.toolTip = "语音指令仅在全句命中时生效。快捷键 \(DictationHotKey.label(keyCode: s.hotkeyKeyCode, flags: s.hotkeyFlags)) 用于在激活/非激活之间切换；上方菜单项负责开启/关停麦克风。"
+        itemDictationHint = makeDisabled("激活中直接说话上屏 · 说「over」待命 ·「发送」回车并待命")
+        itemDictationHint.toolTip = "语音指令仅在全句命中时生效，且只在激活状态识别。麦克风开启即进入激活输入；快捷键 \(DictationHotKey.label(keyCode: s.hotkeyKeyCode, flags: s.hotkeyFlags)) 在激活/非激活之间切换，非激活待命只驱动波形不做识别。上方菜单项负责开启/关停麦克风。"
         rootMenu.addItem(itemDictationHint)
 
         let settingsMenu = NSMenu()
