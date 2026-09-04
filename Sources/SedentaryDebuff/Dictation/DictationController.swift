@@ -714,8 +714,9 @@ final class DictationController: ObservableObject {
     }
 
     /// 语音指令识别：整段转写文本去掉首尾空白、标点并忽略大小写后，恰好等于某个指令词。
-    /// 「发送」例外：允许贴在句子末尾——去掉 STT 自动追加的尾随标点后，末两字为「发送」
-    /// 即视为发送指令（不必单独说「发送」），前面的正文作为 body 随发送一起上屏。
+    /// 「发送」和「清空/clear」例外：允许贴在句子末尾——去掉 STT 自动追加的尾随标点后，
+    /// 末两字为「发送」即视为发送指令（前面的正文作为 body 随发送一起上屏）；末尾为
+    /// 「清空/clear」即视为清空指令（不必单独说一个词，前面的正文一律丢弃不上屏）。
     private static func detectCommand(_ text: String) -> CommandMatch? {
         let normalized = normalizedCommand(text)
         switch normalized {
@@ -727,6 +728,9 @@ final class DictationController: ObservableObject {
             return CommandMatch(command: .clear, body: nil)
         default:
             break
+        }
+        if normalized.hasSuffix("清空") || normalized.hasSuffix("clear") {
+            return CommandMatch(command: .clear, body: nil)
         }
         guard normalized.hasSuffix("发送") else { return nil }
         let body = String(normalized.dropLast(2))
