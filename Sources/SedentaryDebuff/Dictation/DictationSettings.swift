@@ -38,7 +38,7 @@ final class DictationSettings: ObservableObject {
     static let defaultURL = "http://127.0.0.1:8001/v1/audio/transcriptions"
     static let defaultKeyCode: UInt32 = 2 // kVK_ANSI_D
     static let defaultFlags: UInt32 = UInt32(optionKey) // ⌥D
-    static let pausePresets: [Double] = [0.6, 0.8, 1.0, 1.5, 2.0]
+    static let pausePresets: [Double] = [0.4, 0.6, 0.8, 1.0, 1.5, 2.0]
     static let maxSegmentPresets: [Double] = [5, 10, 15, 20, 30]
     static let activeOpacityPresets: [Double] = [0.5, 0.65, 0.8, 1.0]
     static let waveformWidthPresets: [Double] = [35, 60, 100, 167, 240, 320]
