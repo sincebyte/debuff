@@ -33,6 +33,8 @@ final class DictationController: ObservableObject {
     private var lastError: String?
     private var unpasted: [String] = []
     private var awaitingPermission = false
+    /// 权限弹窗期间是否仍期望开启（锁屏/停止会清掉，避免授权回来后在锁屏时悄悄开麦）。
+    private var shouldStartOnPermission = false
     /// 引擎代数：每启动一次监听自增，过期转写结果按代数丢弃，避免跨会话串扰。
     private var generation = 0
     /// 锁屏时若在监听，记录解锁后要恢复的模式。
@@ -43,6 +45,30 @@ final class DictationController: ObservableObject {
     private var pasteBusy = false
     /// 引擎因输入/输出硬件变化（切换麦克风等）自行 stop 时回调，用于原地续麦。
     private var engineConfigChangeObserver: NSObjectProtocol?
+
+    // MARK: 引擎健康自愈
+    /// 锁屏/唤醒、设备重连后设备往往延迟就绪：start() 可能抛错，或“start 成功却不回调
+    /// 任何输入缓冲”（引擎僵死）。以下字段 + 周期健康检查用于把僵死引擎重建重启，
+    /// 让录音在麦克风就绪后自动恢复，而不是停留在“开着却录不进声音”。
+    /// 周期性健康检查定时器（engineQueue 上，只在监听期间动作）。
+    private var healthTimer: DispatchSourceTimer?
+    /// 最近一次引擎 start 成功的时刻，用于区分“刚启动”与“早已僵死”。
+    private var engineStartedAt: Date?
+    /// 连续启动/自愈失败次数，成功或观测到数据流时清零，超阈值放弃自愈。
+    private var startFailureStreak = 0
+    /// 全新开启（从 off 启动）的自动重试标记与目标状态。
+    private var autoBootPending = false
+    private var autoBootMode: State = .active
+    private var autoBootAttempt = 0
+
+    /// 首次开启失败时的最大重试次数（退避延迟累加，合计约一分钟）。
+    private static let maxBootAttempts = 20
+    /// 监听中原地自愈（引擎未运行 / 运行但无数据）的连续失败上限，超过后停止监听避免空转。
+    private static let maxRecoveryStreak = 6
+    /// 健康检查周期。
+    private static let healthCheckInterval: TimeInterval = 3
+    /// 引擎运行后超过该时长仍收不到输入缓冲即判定僵死。
+    private static let noBufferStallSeconds: TimeInterval = 6
 
     private let waveformData = DictationWaveformData()
     private let waveformPanel: DictationWaveformPanel
@@ -88,6 +114,18 @@ final class DictationController: ObservableObject {
             self?.settings.waveformWidth = Double(width)
         }
         waveformPanel.setWidth(CGFloat(settings.waveformWidth))
+        startHealthTimer()
+    }
+
+    /// 周期检查引擎健康：麦克风应开未开、或引擎僵死（开着却没数据流）时自动重建重启。
+    private func startHealthTimer() {
+        let timer = DispatchSource.makeTimerSource(queue: engineQueue)
+        timer.schedule(deadline: .now() + Self.healthCheckInterval, repeating: Self.healthCheckInterval)
+        timer.setEventHandler { [weak self] in
+            self?.healthCheck()
+        }
+        timer.resume()
+        healthTimer = timer
     }
 
     func applyWaveformWidth() {
@@ -95,6 +133,8 @@ final class DictationController: ObservableObject {
     }
 
     deinit {
+        healthTimer?.cancel()
+        healthTimer = nil
         if let engineConfigChangeObserver {
             NotificationCenter.default.removeObserver(engineConfigChangeObserver)
         }
@@ -185,26 +225,27 @@ final class DictationController: ObservableObject {
             return
         }
         awaitingPermission = true
+        shouldStartOnPermission = true
         recorder.requestPermission { [weak self] granted in
             guard let self else { return }
             self.engineQueue.async {
                 self.awaitingPermission = false
                 if granted {
+                    // 若期间已锁屏/已停止，此处应放弃开启，避免在锁屏状态下开麦。
+                    guard self.shouldStartOnPermission else { return }
+                    self.shouldStartOnPermission = false
                     self.beginRecording(mode: initialMode)
                 } else {
+                    self.shouldStartOnPermission = false
                     self.setStatus("未授权麦克风，请在系统设置中允许")
                 }
             }
         }
     }
 
+    /// 全新开启（从 off 启动，含解锁后恢复）：重置会话状态后启动引擎。
+    /// 麦克风在锁屏/唤醒瞬间往往尚未就绪，start 可能抛错，这里交给自动退避重试自愈。
     private func beginRecording(mode: State = .active) {
-        do {
-            try recorder.start()
-        } catch {
-            setStatus("启动麦克风失败：\(error.localizedDescription)")
-            return
-        }
         segmentSamples.removeAll()
         segmentStart = nil
         vad.reset()
@@ -214,6 +255,55 @@ final class DictationController: ObservableObject {
         lastError = nil
         unpasted.removeAll()
         generation += 1
+        // 取消上一次可能仍在排队的启动重试，改用本次目标状态。
+        autoBootPending = false
+        autoBootAttempt = 0
+        bootAndEnter(mode: mode)
+    }
+
+    /// 记录一次“想要开启引擎”的目标，随后立即尝试；失败由 attemptBootOnce 自动退避重试。
+    private func bootAndEnter(mode: State) {
+        guard currentState == .off, !autoBootPending else { return }
+        autoBootMode = mode
+        autoBootPending = true
+        attemptBootOnce()
+    }
+
+    /// 从 off 状态启动引擎：失败则按指数退避自动重试（解锁/唤醒瞬间设备未就绪也能自动恢复）。
+    /// 重试期间保持 off（面板隐藏），一旦成功再进入目标监听状态。
+    private func attemptBootOnce() {
+        guard currentState == .off, autoBootPending else { return }
+        do {
+            recorder.rebuildEngine()
+            try recorder.start()
+        } catch {
+            autoBootAttempt += 1
+            guard autoBootAttempt <= Self.maxBootAttempts else {
+                CrashLog.write("[\(Date())] 启动麦克风连续失败 \(autoBootAttempt) 次，放弃\n")
+                autoBootPending = false
+                autoBootAttempt = 0
+                setStatus("启动麦克风失败：\(error.localizedDescription)")
+                return
+            }
+            CrashLog.write("[\(Date())] 启动麦克风失败（第 \(autoBootAttempt) 次，稍后重试）：\(error.localizedDescription)\n")
+            setStatus("启动麦克风失败，正在等待麦克风就绪自动重试…（\(autoBootAttempt)）")
+            let delay = min(0.3 * pow(2.0, Double(autoBootAttempt - 1)), 4.0)
+            engineQueue.asyncAfter(deadline: .now() + delay) { [weak self] in
+                guard let self, self.autoBootPending else { return }
+                self.attemptBootOnce()
+            }
+            return
+        }
+        autoBootPending = false
+        autoBootAttempt = 0
+        engineStartedAt = Date()
+        let mode = autoBootMode
+        CrashLog.write("[\(Date())] 引擎启动成功，进入 \(mode == .active ? "激活" : "非激活")\n")
+        enterListeningState(mode)
+    }
+
+    /// 引擎启动成功后的 UI 收尾：进入指定状态并展示波形面板。
+    private func enterListeningState(_ mode: State) {
         waveformData.reset(sampleRate: recorder.sampleRate)
         let initial = mode == .active ? State.active : .inactive
         setState(initial)
@@ -233,6 +323,7 @@ final class DictationController: ObservableObject {
         guard currentState == .active || currentState == .inactive else { return }
         let wasActive = currentState == .active
         CrashLog.write("[\(Date())] 停止引擎：state=\(currentState)\n")
+        resetEngineBookkeeping()
         isFlushing = true
         discardPendingOnStop = !wasActive
         setState(.flushing)
@@ -255,6 +346,16 @@ final class DictationController: ObservableObject {
             }
             self.finishIfNeeded()
         }
+    }
+
+    /// 重置引擎健康自愈相关簿记（停止/锁屏时调用，避免残留的重试与计数干扰下一轮）。
+    private func resetEngineBookkeeping() {
+        autoBootPending = false
+        autoBootAttempt = 0
+        startFailureStreak = 0
+        engineStartedAt = nil
+        shouldStartOnPermission = false
+        recorder.resetBufferClock()
     }
 
     // MARK: - 锁屏 / 解锁
@@ -286,7 +387,9 @@ final class DictationController: ObservableObject {
     }
 
     /// 立即停麦（用于锁屏）：丢弃未上屏与在途转写，切到关闭态。
+    /// 即使当前是 off（全新开启的自动重试仍在排队），也要先取消排队，避免锁屏期间悄悄开麦。
     private func stopForScreenLock() {
+        resetEngineBookkeeping()
         guard currentState != .off else { return }
         CrashLog.write("[\(Date())] 锁屏：停止监听 state=\(currentState)\n")
         if recorder.isRunning {
@@ -363,15 +466,18 @@ final class DictationController: ObservableObject {
         }
     }
 
-    // MARK: - 硬件变化（切换输入设备）
+    // MARK: - 硬件变化（切换输入设备）与引擎健康自愈
 
     /// 输入/输出硬件变化（如切换麦克风、锁屏/唤醒）时引擎被系统自行 stop。
     /// 先重建引擎，让 inputNode 丢弃旧设备的缓存格式、重新绑定当前硬件——
     /// 否则用过期格式 installTap 会抛 NSException（format mismatch）崩溃。
     /// 锁屏前的停麦（stopForScreenLock）会先置为 off，此处不会重复续麦。
+    /// 注意：设备重连后设备往往还没就绪，立即续麦可能 start 抛错或“开着却无数据”，
+    /// 失败不置 off，交由周期健康检查继续自愈，直到麦克风真正就绪、数据流入。
     private func handleEngineConfigurationChange() {
         // 无论是否在监听都重建，保证下次 start() 用的是新硬件的格式。
         recorder.rebuildEngine()
+        recorder.resetBufferClock()
         guard currentState == .active || currentState == .inactive else { return }
         CrashLog.write("[\(Date())] 输入设备变化：引擎被系统停止，原地续麦 state=\(currentState)\n")
         segmentSamples.removeAll()
@@ -379,20 +485,97 @@ final class DictationController: ObservableObject {
         vad.reset()
         do {
             try recorder.start()
+            engineStartedAt = Date()
+            waveformData.reset(sampleRate: recorder.sampleRate)
+            CrashLog.write("[\(Date())] 输入设备变化后已续麦 state=\(currentState)\n")
         } catch {
-            CrashLog.write("[\(Date())] 输入设备变化后重启麦克风失败：\(error.localizedDescription)\n")
-            currentState = .off
-            setState(.off)
-            setStatus("切换输入设备后重启麦克风失败：\(error.localizedDescription)")
-            DispatchQueue.main.async { [weak self] in
-                guard let self else { return }
-                self.waveformPanel.setActive(false)
-                self.waveformPanel.setListening(false)
-                self.waveformPanel.hide()
-            }
+            // 此刻设备可能尚未就绪：不打断当前状态，健康检查会在就绪后自动续上。
+            CrashLog.write("[\(Date())] 输入设备变化后重启麦克风失败，等待自动恢复：\(error.localizedDescription)\n")
+            setStatus("麦克风切换后正在自动恢复…")
+        }
+    }
+
+    /// 周期健康检查（engineQueue 上运行）：麦克风应开未开、或引擎僵死（开着却没
+    /// 数据流）时原地重建重启，让锁屏/唤醒、设备重连后的录音自动恢复。
+    private func healthCheck() {
+        guard currentState == .active || currentState == .inactive else { return }
+        // 刚启动/刚重建后的观察期：给设备就绪留缓冲，期间不做判定（避免反复重建）。
+        if let started = engineStartedAt,
+           Date().timeIntervalSince(started) <= Self.healthCheckInterval {
             return
         }
-        waveformData.reset(sampleRate: recorder.sampleRate)
+        if engineIsProducing() {
+            // 数据正常流入：清空失败计数，保持健康。
+            if startFailureStreak != 0 { startFailureStreak = 0 }
+            return
+        }
+        startFailureStreak += 1
+        if startFailureStreak >= Self.maxRecoveryStreak {
+            CrashLog.write("[\(Date())] 麦克风持续不可用（连续 \(startFailureStreak) 次），停止监听避免空转\n")
+            stopAfterHardwareFailure()
+            return
+        }
+        if recorder.isRunning {
+            CrashLog.write("[\(Date())] 健康检查：引擎运行但收不到输入数据（第 \(startFailureStreak) 次），重建重启\n")
+            recoverEngineInPlace(reason: "运行中无音频数据（设备疑似未就绪）")
+        } else {
+            CrashLog.write("[\(Date())] 健康检查：引擎意外停止（第 \(startFailureStreak) 次），重启\n")
+            recoverEngineInPlace(reason: "引擎意外停止")
+        }
+    }
+
+    /// 引擎是否正在产出音频：须持续收到输入缓冲才算健康（静音也会收到缓冲，
+    /// 因此“无数据”即意味着 tap 僵死）。观察期由 healthCheck 单独处理。
+    private func engineIsProducing() -> Bool {
+        guard recorder.isRunning, let started = engineStartedAt else { return false }
+        guard let last = recorder.lastBufferAt else { return false }
+        return Date().timeIntervalSince(started) > Self.healthCheckInterval
+            && Date().timeIntervalSince(last) <= Self.noBufferStallSeconds
+    }
+
+    /// 监听中原地恢复引擎（保留当前激活/非激活状态与波形面板）。失败时交由下一轮
+    /// 健康检查继续，不打断现有状态。
+    private func recoverEngineInPlace(reason: String) {
+        guard currentState == .active || currentState == .inactive else { return }
+        CrashLog.write("[\(Date())] 原地重建重启引擎：\(reason) state=\(currentState)\n")
+        segmentSamples.removeAll()
+        segmentStart = nil
+        vad.reset()
+        recorder.rebuildEngine()
+        do {
+            try recorder.start()
+            engineStartedAt = Date()
+            waveformData.reset(sampleRate: recorder.sampleRate)
+            CrashLog.write("[\(Date())] 原地重启成功 state=\(currentState)\n")
+        } catch {
+            CrashLog.write("[\(Date())] 原地重启失败：\(error.localizedDescription)，等下一轮重试\n")
+            setStatus("麦克风恢复中，请稍候…")
+        }
+    }
+
+    /// 长时间无法获取麦克风数据时收尾：复位并停到 off，给出可操作的提示。
+    private func stopAfterHardwareFailure() {
+        resetEngineBookkeeping()
+        if recorder.isRunning {
+            recorder.stop()
+        }
+        segmentSamples.removeAll()
+        segmentStart = nil
+        vad.reset()
+        isFlushing = false
+        discardPendingOnStop = true
+        generation += 1
+        pending = 0
+        lastError = nil
+        unpasted.removeAll()
+        setState(.off)
+        setStatus("麦克风不可用，语音输入已停止（可稍后重新开始）")
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.waveformPanel.setActive(false)
+            self.waveformPanel.setListening(false)
+            self.waveformPanel.hide()
+        }
     }
 
     // MARK: - 音频处理

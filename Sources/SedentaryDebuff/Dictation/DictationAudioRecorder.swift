@@ -28,6 +28,30 @@ final class DictationAudioRecorder {
 
     var isRunning: Bool { engine.isRunning }
 
+    private let bufferClockLock = NSLock()
+    private var _lastBufferAt: Date?
+
+    /// 最近一次收到输入缓冲的时刻。锁屏/唤醒或设备重连后，引擎可能“start 成功却
+    /// 一直不回调 tap”（设备尚未就绪），此时该值长时间不更新，健康检查据此重建重启。
+    var lastBufferAt: Date? {
+        bufferClockLock.lock()
+        defer { bufferClockLock.unlock() }
+        return _lastBufferAt
+    }
+
+    private func markBufferReceived() {
+        bufferClockLock.lock()
+        _lastBufferAt = Date()
+        bufferClockLock.unlock()
+    }
+
+    /// 清理缓冲时钟：启动/重建引擎时调用，避免误把上一轮引擎的最后缓冲当作本轮“健康”。
+    func resetBufferClock() {
+        bufferClockLock.lock()
+        _lastBufferAt = nil
+        bufferClockLock.unlock()
+    }
+
     func requestPermission(completion: @escaping (Bool) -> Void) {
         switch AVCaptureDevice.authorizationStatus(for: .audio) {
         case .authorized:
@@ -56,6 +80,7 @@ final class DictationAudioRecorder {
             engine.inputNode.removeTap(onBus: 0)
             tapInstalled = false
         }
+        resetBufferClock()
         let input = engine.inputNode
         let format = input.outputFormat(forBus: 0)
         guard format.sampleRate > 0, format.channelCount > 0 else {
@@ -63,6 +88,7 @@ final class DictationAudioRecorder {
         }
         sampleRate = format.sampleRate
         input.installTap(onBus: 0, bufferSize: 4096, format: format) { [weak self] buffer, _ in
+            self?.markBufferReceived()
             self?.onBuffer?(buffer)
         }
         tapInstalled = true
@@ -93,5 +119,6 @@ final class DictationAudioRecorder {
         }
         engine = AVAudioEngine()
         sampleRate = 0
+        resetBufferClock()
     }
 }
