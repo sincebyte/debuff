@@ -45,6 +45,8 @@ final class DictationController: ObservableObject {
     private var pasteBusy = false
     /// 引擎因输入/输出硬件变化（切换麦克风等）自行 stop 时回调，用于原地续麦。
     private var engineConfigChangeObserver: NSObjectProtocol?
+    /// 应用退出前还原系统默认输入设备（若录音期间被我们临时切走）。
+    private var terminationObserver: NSObjectProtocol?
 
     // MARK: 引擎健康自愈
     /// 锁屏/唤醒、设备重连后设备往往延迟就绪：start() 可能抛错，或“start 成功却不回调
@@ -108,6 +110,13 @@ final class DictationController: ObservableObject {
                 self?.handleEngineConfigurationChange()
             }
         }
+        terminationObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.willTerminateNotification,
+            object: nil,
+            queue: nil
+        ) { [weak self] _ in
+            self?.recorder.stop()
+        }
         applyHotkey()
         waveformPanel.setActiveOpacity(settings.activeOpacity)
         waveformPanel.onWidthChange = { [weak self] width in
@@ -137,6 +146,9 @@ final class DictationController: ObservableObject {
         healthTimer = nil
         if let engineConfigChangeObserver {
             NotificationCenter.default.removeObserver(engineConfigChangeObserver)
+        }
+        if let terminationObserver {
+            NotificationCenter.default.removeObserver(terminationObserver)
         }
         DictationHotKey.unregister()
     }
@@ -215,6 +227,34 @@ final class DictationController: ObservableObject {
         }
     }
 
+    /// 菜单选择麦克风后调用：更新本次/下次会话要用的麦克风（nil = 跟随系统默认）。
+    /// 正在监听时原地重建重启引擎，让系统默认输入切到新选设备并立即生效；
+    /// 引擎未开时只记录目标，下次 start 时由 recorder 临时切换默认输入。
+    func applyMicrophoneInput() {
+        engineQueue.async { [weak self] in
+            guard let self else { return }
+            self.recorder.setInputDevice(uid: self.settings.microphoneUID)
+            guard self.currentState == .active || self.currentState == .inactive else { return }
+            CrashLog.write("[\(Date())] 切换麦克风：\(self.settings.microphoneUID ?? "跟随系统默认")，原地重启引擎\n")
+            self.segmentSamples.removeAll()
+            self.segmentStart = nil
+            self.vad.reset()
+            self.recorder.rebuildEngine()
+            self.recorder.resetBufferClock()
+            do {
+                try self.recorder.start()
+                self.engineStartedAt = Date()
+                self.waveformData.reset(sampleRate: self.recorder.sampleRate)
+                CrashLog.write("[\(Date())] 切换麦克风后已重启引擎 state=\(self.currentState)\n")
+                self.setStatus(self.currentState == .active ? "输入中…" : "待命（按 \(self.hotkeyLabel) 重新激活）")
+            } catch {
+                // 设备可能刚切走尚未就绪：不打断状态，健康检查会随后自动续上。
+                CrashLog.write("[\(Date())] 切换麦克风后重启失败：\(error.localizedDescription)\n")
+                self.setStatus("麦克风切换中，正在自动恢复…")
+            }
+        }
+    }
+
     private func requestStart(initialMode: State = .active) {
         guard currentState == .off, !awaitingPermission else { return }
         guard DictationPasteBoard.isAccessibilityTrusted else {
@@ -246,6 +286,8 @@ final class DictationController: ObservableObject {
     /// 全新开启（从 off 启动，含解锁后恢复）：重置会话状态后启动引擎。
     /// 麦克风在锁屏/唤醒瞬间往往尚未就绪，start 可能抛错，这里交给自动退避重试自愈。
     private func beginRecording(mode: State = .active) {
+        // 本次会话要用的麦克风（nil = 跟随系统默认）；start 时 recorder 据此临时切换默认输入。
+        recorder.setInputDevice(uid: settings.microphoneUID)
         segmentSamples.removeAll()
         segmentStart = nil
         vad.reset()
@@ -282,6 +324,8 @@ final class DictationController: ObservableObject {
                 CrashLog.write("[\(Date())] 启动麦克风连续失败 \(autoBootAttempt) 次，放弃\n")
                 autoBootPending = false
                 autoBootAttempt = 0
+                // 收尾：停掉可能的残留路由，把系统默认输入还原。
+                recorder.stop()
                 setStatus("启动麦克风失败：\(error.localizedDescription)")
                 return
             }
@@ -390,11 +434,10 @@ final class DictationController: ObservableObject {
     /// 即使当前是 off（全新开启的自动重试仍在排队），也要先取消排队，避免锁屏期间悄悄开麦。
     private func stopForScreenLock() {
         resetEngineBookkeeping()
+        // 无论当前状态都停一次：释放可能残留的“切默认输入”路由，引擎未运行时 stop 是安全空操作。
+        recorder.stop()
         guard currentState != .off else { return }
         CrashLog.write("[\(Date())] 锁屏：停止监听 state=\(currentState)\n")
-        if recorder.isRunning {
-            recorder.stop()
-        }
         segmentSamples.removeAll()
         segmentStart = nil
         vad.reset()
@@ -556,9 +599,7 @@ final class DictationController: ObservableObject {
     /// 长时间无法获取麦克风数据时收尾：复位并停到 off，给出可操作的提示。
     private func stopAfterHardwareFailure() {
         resetEngineBookkeeping()
-        if recorder.isRunning {
-            recorder.stop()
-        }
+        recorder.stop()
         segmentSamples.removeAll()
         segmentStart = nil
         vad.reset()

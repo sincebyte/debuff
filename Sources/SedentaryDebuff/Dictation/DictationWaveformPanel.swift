@@ -4,6 +4,8 @@ import SwiftUI
 private let waveformMinWidth: CGFloat = 35
 private let waveformMaxWidth: CGFloat = 400
 private let waveformDefaultWidth: CGFloat = 167
+/// 整体 UI 高度；内部音柱、圆角与外框都随该高度等比缩放。
+private let waveformHeight: CGFloat = 28
 
 final class DictationWaveformPanel {
     private var panel: NSPanel?
@@ -59,7 +61,7 @@ final class DictationWaveformPanel {
 
     private func ensurePanel() {
         guard panel == nil else { return }
-        let size = NSSize(width: currentWidth, height: 35)
+        let size = NSSize(width: currentWidth, height: waveformHeight)
         let host = PassThroughHostingView(rootView: DictationWaveformView(data: data, state: viewState))
         host.frame = NSRect(origin: .zero, size: size)
         host.autoresizingMask = [.width, .height]

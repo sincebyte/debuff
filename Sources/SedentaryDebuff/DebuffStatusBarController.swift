@@ -34,6 +34,8 @@ final class DebuffStatusBarController: NSObject, NSMenuDelegate {
     private var itemDictationPasteEnd: NSMenuItem!
     private var itemDictationURL: NSMenuItem!
     private var itemDictationHotkey: NSMenuItem!
+    private var itemMicParent: NSMenuItem!
+    private var micMenu: NSMenu!
     private var pauseOptionItems: [NSMenuItem] = []
     private var maxSegmentItems: [NSMenuItem] = []
     private var activeOpacityItems: [NSMenuItem] = []
@@ -275,6 +277,14 @@ final class DebuffStatusBarController: NSObject, NSMenuDelegate {
             hotkeyPresetItems.append(it)
         }
 
+        settingsMenu.addItem(subHeader("麦克风"))
+        itemMicParent = NSMenuItem(title: microphoneTitle, action: nil, keyEquivalent: "")
+        micMenu = NSMenu()
+        micMenu.delegate = self
+        itemMicParent.submenu = micMenu
+        settingsMenu.addItem(itemMicParent)
+        rebuildMicMenu()
+
         let settingsParent = NSMenuItem(title: "设置", action: nil, keyEquivalent: "")
         settingsParent.submenu = settingsMenu
         rootMenu.addItem(settingsParent)
@@ -444,6 +454,51 @@ final class DebuffStatusBarController: NSObject, NSMenuDelegate {
         refreshDictationItems()
     }
 
+    @objc private func selectMicrophone(_ sender: NSMenuItem) {
+        // representedObject 存麦克风 uid；nil 表示「跟随系统默认」。
+        let uid = sender.representedObject as? String
+        services.dictation.settings.microphoneUID = uid
+        services.dictation.applyMicrophoneInput()
+        refreshDictationItems()
+    }
+
+    /// 当前麦克风标题：选中了具体设备则显示其名称，否则显示「跟随系统默认（当前：X）」。
+    private var microphoneTitle: String {
+        let s = services.dictation.settings
+        if let uid = s.microphoneUID {
+            let name = DictationMicrophone.name(forUID: uid) ?? "所选设备已断开"
+            return "麦克风：\(name)"
+        }
+        let defaultName = DictationMicrophone.defaultInputDeviceName() ?? "无输入设备"
+        return "麦克风：跟随系统默认（\(defaultName)）"
+    }
+
+    /// 重建「麦克风」子菜单：跟随系统默认 + 当前在线的输入设备列表。
+    private func rebuildMicMenu() {
+        guard micMenu != nil else { return }
+        micMenu.removeAllItems()
+        let s = services.dictation.settings
+        let follow = NSMenuItem(title: "跟随系统默认", action: #selector(selectMicrophone(_:)), keyEquivalent: "")
+        follow.target = self
+        follow.representedObject = nil
+        follow.state = s.microphoneUID == nil ? .on : .off
+        micMenu.addItem(follow)
+        micMenu.addItem(NSMenuItem.separator())
+        let devices = DictationMicrophone.availableInputDevices()
+        if devices.isEmpty {
+            let empty = makeDisabled("未找到输入设备")
+            micMenu.addItem(empty)
+        } else {
+            for device in devices {
+                let it = NSMenuItem(title: device.name, action: #selector(selectMicrophone(_:)), keyEquivalent: "")
+                it.target = self
+                it.representedObject = device.uid
+                it.state = s.microphoneUID == device.uid ? .on : .off
+                micMenu.addItem(it)
+            }
+        }
+    }
+
     @objc private func editSTTURL() {
         NSApp.activate(ignoringOtherApps: true)
         let alert = NSAlert()
@@ -546,6 +601,9 @@ final class DebuffStatusBarController: NSObject, NSMenuDelegate {
     func menuWillOpen(_ menu: NSMenu) {
         if menu == rootMenu {
             refreshAllVisibleStrings()
+        } else if menu == micMenu {
+            // 设备可随时插拔：展开麦克风子菜单前重建一次设备列表与勾选状态。
+            rebuildMicMenu()
         }
     }
 
@@ -566,6 +624,7 @@ final class DebuffStatusBarController: NSObject, NSMenuDelegate {
         itemDictationStatus.title = d.statusText
         itemDictationURL.title = s.sttURLString
         itemDictationHotkey.title = DictationHotKey.label(keyCode: s.hotkeyKeyCode, flags: s.hotkeyFlags)
+        itemMicParent.title = microphoneTitle
         itemDictationPasteLive.state = s.livePaste ? .on : .off
         itemDictationPasteEnd.state = s.livePaste ? .off : .on
         for it in pauseOptionItems {

@@ -35,6 +35,17 @@ final class DictationSettings: ObservableObject {
         didSet { UserDefaults.standard.set(waveformWidth, forKey: Self.waveformWidthKey) }
     }
 
+    /// 选中的麦克风 uid；nil = 跟随系统当前默认输入设备。仅录音期间临时生效。
+    @Published var microphoneUID: String? {
+        didSet {
+            if let microphoneUID {
+                UserDefaults.standard.set(microphoneUID, forKey: Self.microphoneKey)
+            } else {
+                UserDefaults.standard.removeObject(forKey: Self.microphoneKey)
+            }
+        }
+    }
+
     static let defaultURL = "http://127.0.0.1:8001/v1/audio/transcriptions"
     static let defaultKeyCode: UInt32 = 2 // kVK_ANSI_D
     static let defaultFlags: UInt32 = UInt32(optionKey) // ⌥D
@@ -52,6 +63,7 @@ final class DictationSettings: ObservableObject {
     private static let maxSegmentKey = "dictation.maxSegment"
     private static let activeOpacityKey = "dictation.activeOpacity"
     private static let waveformWidthKey = "dictation.waveform.width"
+    private static let microphoneKey = "dictation.microphone.uid"
 
     init() {
         let def = UserDefaults.standard
@@ -63,6 +75,7 @@ final class DictationSettings: ObservableObject {
         maxSegmentSeconds = def.object(forKey: Self.maxSegmentKey) as? Double ?? 10.0
         activeOpacity = def.object(forKey: Self.activeOpacityKey) as? Double ?? 1.0
         waveformWidth = def.object(forKey: Self.waveformWidthKey) as? Double ?? 167.0
+        microphoneUID = def.string(forKey: Self.microphoneKey)
         migrateHotkeyIfNeeded()
     }
 
