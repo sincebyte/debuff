@@ -702,6 +702,20 @@ final class DictationController: ObservableObject {
 
     // MARK: - 转写结果
 
+    /// 清理转写文本首尾无意义的空白，但保留句尾用于段间分段的换行：
+    /// 服务端在每个转写结果末尾追加空行（"\n\n"），让连续几句粘贴后读成独立段落；
+    /// 若按旧的整段 trim 把句尾换行一并裁掉，句与句之间就会黏成一段。
+    private func cleanedTranscribedText(_ text: String) -> String {
+        let base = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !base.isEmpty else { return "" }
+        var trailingNewlines = 0
+        for character in text.reversed() {
+            guard character.isNewline else { break }
+            trailingNewlines += 1
+        }
+        return base + String(repeating: "\n", count: trailingNewlines)
+    }
+
     private func handleResult(_ result: Result<String, Error>, generation gen: Int) {
         // 过期代数（锁屏停麦/重启引擎前的转写）一律丢弃，避免误上屏或误执行指令。
         guard gen == generation else {
@@ -711,10 +725,10 @@ final class DictationController: ObservableObject {
         pending -= 1
         switch result {
         case .success(let text):
-            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-            CrashLog.write("[\(Date())] 转写结果: 「\(trimmed)」 state=\(currentState)\n")
-            if !trimmed.isEmpty {
-                handleTranscribed(trimmed)
+            let cleaned = cleanedTranscribedText(text)
+            CrashLog.write("[\(Date())] 转写结果: 「\(cleaned)」 state=\(currentState)\n")
+            if !cleaned.isEmpty {
+                handleTranscribed(cleaned)
             }
         case .failure(let error):
             lastError = error.localizedDescription
