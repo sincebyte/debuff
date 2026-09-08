@@ -32,6 +32,8 @@ final class DebuffStatusBarController: NSObject, NSMenuDelegate {
     private var itemDictationHint: NSMenuItem!
     private var itemJournalToggle: NSMenuItem!
     private var itemJournalOpen: NSMenuItem!
+    private var itemJournalTodayText: NSMenuItem!
+    private var itemJournalSavedTime: NSMenuItem!
     private var itemDictationPasteLive: NSMenuItem!
     private var itemDictationPasteEnd: NSMenuItem!
     private var itemDictationURL: NSMenuItem!
@@ -204,17 +206,24 @@ final class DebuffStatusBarController: NSObject, NSMenuDelegate {
         rootMenu.addItem(itemDictationStatus)
 
         itemDictationHint = makeDisabled("激活中直接说话上屏 · 说「over」待命 · 句末带「发送」即回车发送并待命")
-        itemDictationHint.toolTip = "语音指令只在激活状态识别；句子末尾带「发送」即回车发送并待命，其余指令需整句命中。麦克风开启即进入激活输入；主快捷键 \(DictationHotKey.label(keyCode: s.hotkeyKeyCode, flags: s.hotkeyFlags)) 与固定 End 键都在激活/非激活之间切换，非激活待命只驱动波形不做上屏识别（语音日记开启时后台仍会转写并记到桌面）。上方菜单项负责开启/关停麦克风。"
+        itemDictationHint.toolTip = "语音指令只在激活状态识别；句子末尾带「发送」即回车发送并待命，其余指令需整句命中。麦克风开启即进入激活输入；主快捷键 \(DictationHotKey.label(keyCode: s.hotkeyKeyCode, flags: s.hotkeyFlags)) 与固定 End 键都在激活/非激活之间切换，非激活待命只驱动波形不做上屏识别（语音日记也只记录激活状态转写的内容，不会后台转写待命期的杂音）。上方菜单项负责开启/关停麦克风。"
         rootMenu.addItem(itemDictationHint)
 
         itemJournalToggle = NSMenuItem(title: journalToggleTitle, action: #selector(toggleJournal), keyEquivalent: "")
         itemJournalToggle.target = self
         itemJournalToggle.setOn(s.journalEnabled, checkmark: true)
-        itemJournalToggle.toolTip = "监听期间（无论激活还是非激活待命）都会把说过的话按 VAD 切片转写，逐条带「日期+时分秒」时间戳追加到桌面 语音日记/当天日期.txt；激活上屏的内容复用同一次转写，纯指令词（over/发送/清空等）不入日记。"
+        itemJournalToggle.toolTip = "开启后，激活语音转写并上屏/发送的内容会逐条带「日期+时分秒」追加到桌面 语音日记/当天日期.txt；非激活待命不后台录音转写，杂音不进日记。纯指令词（over/发送/清空等）不入日记。下方的今日字数与累计节约统计始终跟随激活语音输入累计，与是否写入桌面文件无关。"
         rootMenu.addItem(itemJournalToggle)
         itemJournalOpen = NSMenuItem(title: "打开语音日记目录…", action: #selector(openJournalFolder), keyEquivalent: "")
         itemJournalOpen.target = self
         rootMenu.addItem(itemJournalOpen)
+
+        itemJournalTodayText = makeDisabled("")
+        itemJournalTodayText.toolTip = "今日激活语音转写的字符数（跨自然日自动清零重计）。"
+        rootMenu.addItem(itemJournalTodayText)
+        itemJournalSavedTime = makeDisabled("")
+        itemJournalSavedTime.toolTip = "按 \(Int(VoiceJournalStats.charsPerMinute)) 字/分钟的打字速度估算：转写 N 字 ≈ 节约 N/\(Int(VoiceJournalStats.charsPerMinute)) 分钟，历史语音输入折算的节约时间永久累计。"
+        rootMenu.addItem(itemJournalSavedTime)
 
         let settingsMenu = NSMenu()
 
@@ -310,7 +319,23 @@ final class DebuffStatusBarController: NSObject, NSMenuDelegate {
     }
 
     private var journalToggleTitle: String {
-        "语音日记：把说的话记录到桌面"
+        "语音日记：记录激活语音到桌面"
+    }
+
+    private var journalTodayLine: String {
+        let today = VoiceJournalStats.snapshot().todayChars
+        return "今日语音输入：\(Self.grouped(today)) 字"
+    }
+
+    private var journalSavedLine: String {
+        let total = VoiceJournalStats.snapshot().totalChars
+        return "累计节约：\(VoiceJournalStats.savedTimeText(totalChars: total))"
+    }
+
+    private static func grouped(_ value: Int) -> String {
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .decimal
+        return formatter.string(from: NSNumber(value: value)) ?? String(value)
     }
 
     private func addHeader(_ t: String) {
@@ -662,6 +687,8 @@ final class DebuffStatusBarController: NSObject, NSMenuDelegate {
         itemDictationToggle.title = dictationToggleTitle
         itemDictationStatus.title = d.statusText
         itemJournalToggle.setOn(s.journalEnabled, checkmark: true)
+        itemJournalTodayText.title = journalTodayLine
+        itemJournalSavedTime.title = journalSavedLine
         itemDictationURL.title = s.sttURLString
         itemDictationHotkey.title = DictationHotKey.label(keyCode: s.hotkeyKeyCode, flags: s.hotkeyFlags)
         itemMicParent.title = microphoneTitle

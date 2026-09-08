@@ -46,7 +46,8 @@ final class DictationSettings: ObservableObject {
         }
     }
 
-    /// 语音日记：监听期间把说过的话转写并追加到 ~/Desktop/语音日记/当天日期.txt。
+    /// 语音日记：开启后，激活语音转写并上屏/发送的内容会追加到 ~/Desktop/语音日记/当天日期.txt；
+    /// 非激活待命不后台录音转写。今日转写字数/累计节约时间统计与开关无关，始终累计。
     @Published var journalEnabled: Bool {
         didSet { UserDefaults.standard.set(journalEnabled, forKey: Self.journalEnabledKey) }
     }

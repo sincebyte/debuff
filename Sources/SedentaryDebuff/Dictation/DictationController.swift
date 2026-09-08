@@ -294,7 +294,6 @@ final class DictationController: ObservableObject {
     private func beginRecording(mode: State = .active) {
         // 本次会话要用的麦克风（nil = 跟随系统默认）；start 时 recorder 据此临时切换默认输入。
         recorder.setInputDevice(uid: settings.microphoneUID)
-        journal.startSession()
         segmentSamples.removeAll()
         segmentStart = nil
         vad.reset()
@@ -380,8 +379,6 @@ final class DictationController: ObservableObject {
         setState(.flushing)
         setStatus("正在收尾转写…")
         recorder.stop()
-        // 语音日记：把待命期（若从非激活停止）没切完的尾句也收尾落盘。
-        journal.stopSession()
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             self.waveformPanel.setActive(false)
@@ -445,8 +442,6 @@ final class DictationController: ObservableObject {
         resetEngineBookkeeping()
         // 无论当前状态都停一次：释放可能残留的“切默认输入”路由，引擎未运行时 stop 是安全空操作。
         recorder.stop()
-        // 锁屏即停麦：语音日记也收尾，把没切完的尾句落盘（隐私上锁屏期间本就不进音频）。
-        journal.stopSession()
         guard currentState != .off else { return }
         CrashLog.write("[\(Date())] 锁屏：停止监听 state=\(currentState)\n")
         segmentSamples.removeAll()
@@ -488,8 +483,6 @@ final class DictationController: ObservableObject {
             return
         }
         CrashLog.write("[\(Date())] 状态：非激活 → 激活\n")
-        // 待命期最后一句还没触发切段就切换：把尾句强制送转写落盘，避免丢话。
-        journal.flushPartial()
         segmentSamples.removeAll()
         segmentStart = nil
         vad.reset()
@@ -615,7 +608,6 @@ final class DictationController: ObservableObject {
     private func stopAfterHardwareFailure() {
         resetEngineBookkeeping()
         recorder.stop()
-        journal.stopSession()
         segmentSamples.removeAll()
         segmentStart = nil
         vad.reset()
@@ -641,11 +633,8 @@ final class DictationController: ObservableObject {
         let samples = readSamples(buffer)
         guard !samples.isEmpty else { return }
         waveformData.append(samples)
-        // 非激活待命：灰色波形照常跳动，同时把音频喂给语音日记做后台切段/转写。
-        if currentState == .inactive && settings.journalEnabled {
-            journal.append(samples: samples, sampleRate: recorder.sampleRate)
-        }
-        // 非激活待命不做上屏切段/STT 转写，省掉待命期的识别消耗。
+        // 非激活待命只驱动波形：不做上屏切段/STT 转写，也不喂给语音日记，
+        // 避免把待命期环境杂音后台转写进日记。
         guard currentState == .active else { return }
         segmentSamples.append(contentsOf: samples)
         if segmentStart == nil {
