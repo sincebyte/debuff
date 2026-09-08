@@ -16,15 +16,64 @@ enum DictationHotKey {
         Preset(keyCode: 99, flags: UInt32(optionKey | shiftKey), label: "⌥⇧F3"),
     ]
 
-    private static var handler: (() -> Void)?
-    private static var hotKeyRef: EventHotKeyRef?
-    private static var eventHandlerRef: EventHandlerRef?
+    /// 固定的 End 键（kVK_End），常驻注册、不随菜单选择变化，也用于激活/非激活切换。
+    static let fixedEndKeyCode: UInt32 = 119
+    static let fixedEndFlags: UInt32 = 0
+    static var fixedEndLabel: String { label(keyCode: fixedEndKeyCode, flags: fixedEndFlags) }
 
+    private static let signature: OSType = 0x44494354
+    private static let mainSlot: UInt32 = 1
+    private static let fixedEndSlot: UInt32 = 2
+
+    private static var eventHandlerRef: EventHandlerRef?
+    private static var hotKeyRefs: [UInt32: EventHotKeyRef] = [:]
+    private static var handlers: [UInt32: (() -> Void)] = [:]
+
+    /// 注册菜单里可选的主快捷键（替换上一次主快捷键，不影响固定的 End 键）。
     @discardableResult
     static func register(keyCode: UInt32, flags: UInt32, onPress: @escaping () -> Void) -> Bool {
-        unregister()
-        handler = onPress
+        setSlot(mainSlot, keyCode: keyCode, flags: flags, onPress: onPress)
+    }
 
+    /// 注册固定的 End 键。重复调用会先注销旧注册再重新注册。
+    @discardableResult
+    static func registerFixedEnd(onPress: @escaping () -> Void) -> Bool {
+        setSlot(fixedEndSlot, keyCode: fixedEndKeyCode, flags: fixedEndFlags, onPress: onPress)
+    }
+
+    static func unregister() {
+        unregisterSlot(mainSlot)
+        unregisterSlot(fixedEndSlot)
+        if let eventHandlerRef {
+            RemoveEventHandler(eventHandlerRef)
+            self.eventHandlerRef = nil
+        }
+    }
+
+    private static func setSlot(_ slot: UInt32, keyCode: UInt32, flags: UInt32, onPress: @escaping () -> Void) -> Bool {
+        unregisterSlot(slot)
+        guard ensureEventHandler() else { return false }
+        handlers[slot] = onPress
+        let hotKeyID = EventHotKeyID(signature: signature, id: slot)
+        var hotKeyRef: EventHotKeyRef?
+        let registerStatus = RegisterEventHotKey(
+            keyCode,
+            flags,
+            hotKeyID,
+            GetApplicationEventTarget(),
+            0,
+            &hotKeyRef
+        )
+        guard registerStatus == noErr else {
+            handlers[slot] = nil
+            return false
+        }
+        hotKeyRefs[slot] = hotKeyRef
+        return true
+    }
+
+    private static func ensureEventHandler() -> Bool {
+        guard eventHandlerRef == nil else { return true }
         var eventType = EventTypeSpec(
             eventClass: OSType(kEventClassKeyboard),
             eventKind: UInt32(kEventHotKeyPressed)
@@ -37,45 +86,19 @@ enum DictationHotKey {
             nil,
             &eventHandlerRef
         )
-        guard installStatus == noErr else {
-            handler = nil
-            return false
-        }
-
-        let hotKeyID = EventHotKeyID(signature: 0x44494354, id: 1)
-        let registerStatus = RegisterEventHotKey(
-            keyCode,
-            flags,
-            hotKeyID,
-            GetApplicationEventTarget(),
-            0,
-            &hotKeyRef
-        )
-        if registerStatus != noErr {
-            if let eventHandlerRef {
-                RemoveEventHandler(eventHandlerRef)
-                self.eventHandlerRef = nil
-            }
-            handler = nil
-            return false
-        }
-        return true
+        return installStatus == noErr
     }
 
-    static func unregister() {
-        if let eventHandlerRef {
-            RemoveEventHandler(eventHandlerRef)
-            self.eventHandlerRef = nil
-        }
-        if let hotKeyRef {
+    private static func unregisterSlot(_ slot: UInt32) {
+        if let hotKeyRef = hotKeyRefs[slot] {
             UnregisterEventHotKey(hotKeyRef)
-            self.hotKeyRef = nil
+            hotKeyRefs[slot] = nil
         }
-        handler = nil
+        handlers[slot] = nil
     }
 
-    fileprivate static func pressHandled() {
-        let action = handler
+    fileprivate static func pressHandled(slot: UInt32) {
+        let action = handlers[slot]
         DispatchQueue.main.async {
             action?()
         }
@@ -97,7 +120,7 @@ enum DictationHotKey {
         12: "Q", 15: "R", 1: "S", 17: "T", 32: "U", 9: "V", 13: "W", 7: "X",
         16: "Y", 6: "Z",
         29: "0", 18: "1", 19: "2", 20: "3", 21: "4", 23: "5", 22: "6", 26: "7", 28: "8", 25: "9",
-        49: "空格", 36: "回车", 48: "Tab", 53: "Esc",
+        49: "空格", 36: "回车", 48: "Tab", 53: "Esc", 119: "End",
         122: "F1", 120: "F2", 99: "F3", 118: "F4", 96: "F5", 97: "F6", 98: "F7",
         100: "F8", 101: "F9", 109: "F10", 103: "F11", 111: "F12",
         123: "←", 124: "→", 125: "↓", 126: "↑",
@@ -122,7 +145,7 @@ private func hotKeyHandler(
         &hotKeyID
     )
     if status == noErr {
-        DictationHotKey.pressHandled()
+        DictationHotKey.pressHandled(slot: hotKeyID.id)
     }
     return noErr
 }

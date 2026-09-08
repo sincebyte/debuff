@@ -202,7 +202,7 @@ final class DebuffStatusBarController: NSObject, NSMenuDelegate {
         rootMenu.addItem(itemDictationStatus)
 
         itemDictationHint = makeDisabled("激活中直接说话上屏 · 说「over」待命 · 句末带「发送」即回车发送并待命")
-        itemDictationHint.toolTip = "语音指令只在激活状态识别；句子末尾带「发送」即回车发送并待命，其余指令需整句命中。麦克风开启即进入激活输入；快捷键 \(DictationHotKey.label(keyCode: s.hotkeyKeyCode, flags: s.hotkeyFlags)) 在激活/非激活之间切换，非激活待命只驱动波形不做识别。上方菜单项负责开启/关停麦克风。"
+        itemDictationHint.toolTip = "语音指令只在激活状态识别；句子末尾带「发送」即回车发送并待命，其余指令需整句命中。麦克风开启即进入激活输入；主快捷键 \(DictationHotKey.label(keyCode: s.hotkeyKeyCode, flags: s.hotkeyFlags)) 与固定 End 键都在激活/非激活之间切换，非激活待命只驱动波形不做识别。上方菜单项负责开启/关停麦克风。"
         rootMenu.addItem(itemDictationHint)
 
         let settingsMenu = NSMenu()
@@ -276,6 +276,7 @@ final class DebuffStatusBarController: NSObject, NSMenuDelegate {
             settingsMenu.addItem(it)
             hotkeyPresetItems.append(it)
         }
+        settingsMenu.addItem(makeDisabled("End（固定）＝ 激活/非激活切换"))
 
         settingsMenu.addItem(subHeader("麦克风"))
         itemMicParent = NSMenuItem(title: microphoneTitle, action: nil, keyEquivalent: "")

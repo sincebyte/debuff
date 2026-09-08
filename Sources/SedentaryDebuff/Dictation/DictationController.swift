@@ -167,9 +167,10 @@ final class DictationController: ObservableObject {
         DictationPasteBoard.isAccessibilityTrusted
     }
 
-    /// 当前快捷键的展示名，用于待命提示文案。
+    /// 当前快捷键的展示名（主快捷键 + 固定的 End 键），用于待命提示文案。
     private var hotkeyLabel: String {
-        DictationHotKey.label(keyCode: settings.hotkeyKeyCode, flags: settings.hotkeyFlags)
+        let main = DictationHotKey.label(keyCode: settings.hotkeyKeyCode, flags: settings.hotkeyFlags)
+        return "\(main)/\(DictationHotKey.fixedEndLabel)"
     }
 
     // MARK: - 快捷键 / 引擎开关
@@ -179,6 +180,9 @@ final class DictationController: ObservableObject {
             keyCode: settings.hotkeyKeyCode,
             flags: settings.hotkeyFlags
         ) { [weak self] in
+            self?.toggle()
+        }
+        DictationHotKey.registerFixedEnd { [weak self] in
             self?.toggle()
         }
     }
@@ -489,10 +493,12 @@ final class DictationController: ObservableObject {
         }
     }
 
-    /// 激活 → 非激活（语音「over」或快捷键）。先把积压文本（非「边说边贴」模式）落盘，再进入待命。
+    /// 激活 → 非激活（语音「over」或快捷键）。先把切换前还没触发转写的尾句强制送一次转写，
+    /// 再把积压文本（非「边说边贴」模式）落盘，再进入待命。
     private func setVoiceInactive() {
         guard currentState == .active else { return }
         CrashLog.write("[\(Date())] 状态：激活 → 非激活\n")
+        flushFinalSegment()
         segmentSamples.removeAll()
         segmentStart = nil
         vad.reset()
@@ -755,9 +761,19 @@ final class DictationController: ObservableObject {
                 }
             }
         case .inactive:
-            // 非激活待命不切段不转写（见 process()），此处只会收到「激活→非激活」跨越瞬间
-            // 已在途的转写结果，一律丢弃，避免误上屏或误触发。
-            break
+            // 非激活状态不会再发起新的转写；此处收到的只可能是「激活→非激活」瞬间
+            // 已送出的在途转写 / 强制收尾段。它们说的都是切换前的话，仍按激活语义处理：
+            // 命中 clear/删除/发送 等指令照常执行，普通文本照常上屏，避免「最后一句
+            // 还没处理完就待命」丢指令或把指令词当正文粘进去。
+            if let match = Self.detectCommand(text) {
+                if let body = match.body {
+                    unpasted.append(body)
+                }
+                perform(match.command)
+            } else {
+                unpasted.append(text)
+                pasteNextUnpasted()
+            }
         case .flushing:
             // 从激活停止时收尾的文本仍要落盘；从非激活停止时丢弃待命期间的转写。
             if !discardPendingOnStop {
@@ -832,8 +848,10 @@ final class DictationController: ObservableObject {
     }
 
     /// 识别到「发送」指令：粘贴积压文本后发一次回车，并把控件切到非激活待命（不再退出）。
+    /// 刚切到非激活时若「发送」收尾段才返回（currentState == .inactive），同样执行发送，
+    /// 只是无需再切换状态。
     private func performSendCommand() {
-        guard currentState == .active else { return }
+        guard currentState == .active || currentState == .inactive else { return }
         CrashLog.write("[\(Date())] 指令：发送 → 回车并进入非激活\n")
         segmentSamples.removeAll()
         segmentStart = nil
