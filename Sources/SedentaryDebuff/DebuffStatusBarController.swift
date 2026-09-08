@@ -30,6 +30,8 @@ final class DebuffStatusBarController: NSObject, NSMenuDelegate {
     private var itemDictationToggle: NSMenuItem!
     private var itemDictationStatus: NSMenuItem!
     private var itemDictationHint: NSMenuItem!
+    private var itemJournalToggle: NSMenuItem!
+    private var itemJournalOpen: NSMenuItem!
     private var itemDictationPasteLive: NSMenuItem!
     private var itemDictationPasteEnd: NSMenuItem!
     private var itemDictationURL: NSMenuItem!
@@ -202,8 +204,17 @@ final class DebuffStatusBarController: NSObject, NSMenuDelegate {
         rootMenu.addItem(itemDictationStatus)
 
         itemDictationHint = makeDisabled("激活中直接说话上屏 · 说「over」待命 · 句末带「发送」即回车发送并待命")
-        itemDictationHint.toolTip = "语音指令只在激活状态识别；句子末尾带「发送」即回车发送并待命，其余指令需整句命中。麦克风开启即进入激活输入；主快捷键 \(DictationHotKey.label(keyCode: s.hotkeyKeyCode, flags: s.hotkeyFlags)) 与固定 End 键都在激活/非激活之间切换，非激活待命只驱动波形不做识别。上方菜单项负责开启/关停麦克风。"
+        itemDictationHint.toolTip = "语音指令只在激活状态识别；句子末尾带「发送」即回车发送并待命，其余指令需整句命中。麦克风开启即进入激活输入；主快捷键 \(DictationHotKey.label(keyCode: s.hotkeyKeyCode, flags: s.hotkeyFlags)) 与固定 End 键都在激活/非激活之间切换，非激活待命只驱动波形不做上屏识别（语音日记开启时后台仍会转写并记到桌面）。上方菜单项负责开启/关停麦克风。"
         rootMenu.addItem(itemDictationHint)
+
+        itemJournalToggle = NSMenuItem(title: journalToggleTitle, action: #selector(toggleJournal), keyEquivalent: "")
+        itemJournalToggle.target = self
+        itemJournalToggle.setOn(s.journalEnabled, checkmark: true)
+        itemJournalToggle.toolTip = "监听期间（无论激活还是非激活待命）都会把说过的话按 VAD 切片转写，逐条带「日期+时分秒」时间戳追加到桌面 语音日记/当天日期.txt；激活上屏的内容复用同一次转写，纯指令词（over/发送/清空等）不入日记。"
+        rootMenu.addItem(itemJournalToggle)
+        itemJournalOpen = NSMenuItem(title: "打开语音日记目录…", action: #selector(openJournalFolder), keyEquivalent: "")
+        itemJournalOpen.target = self
+        rootMenu.addItem(itemJournalOpen)
 
         let settingsMenu = NSMenu()
 
@@ -296,6 +307,10 @@ final class DebuffStatusBarController: NSObject, NSMenuDelegate {
 
     private var dictationToggleTitle: String {
         services.dictation.isEngineOn ? "停止语音输入" : "开始语音输入"
+    }
+
+    private var journalToggleTitle: String {
+        "语音日记：把说的话记录到桌面"
     }
 
     private func addHeader(_ t: String) {
@@ -405,6 +420,29 @@ final class DebuffStatusBarController: NSObject, NSMenuDelegate {
 
     @objc private func toggleDictation() {
         services.dictation.startStop()
+    }
+
+    @objc private func toggleJournal() {
+        services.dictation.settings.journalEnabled.toggle()
+        refreshDictationItems()
+    }
+
+    @objc private func openJournalFolder() {
+        NSApp.activate(ignoringOtherApps: true)
+        let fileManager = FileManager.default
+        let desktop = fileManager.urls(for: .desktopDirectory, in: .userDomainMask).first
+            ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Desktop", isDirectory: true)
+        let folder = desktop.appendingPathComponent("语音日记", isDirectory: true)
+        try? fileManager.createDirectory(at: folder, withIntermediateDirectories: true)
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd"
+        let today = folder.appendingPathComponent("\(formatter.string(from: Date())).txt")
+        if fileManager.fileExists(atPath: today.path) {
+            NSWorkspace.shared.activateFileViewerSelecting([today])
+        } else {
+            NSWorkspace.shared.open(folder)
+        }
     }
 
     @objc private func selectPasteMode(_ sender: NSMenuItem) {
@@ -623,6 +661,7 @@ final class DebuffStatusBarController: NSObject, NSMenuDelegate {
         let s = d.settings
         itemDictationToggle.title = dictationToggleTitle
         itemDictationStatus.title = d.statusText
+        itemJournalToggle.setOn(s.journalEnabled, checkmark: true)
         itemDictationURL.title = s.sttURLString
         itemDictationHotkey.title = DictationHotKey.label(keyCode: s.hotkeyKeyCode, flags: s.hotkeyFlags)
         itemMicParent.title = microphoneTitle

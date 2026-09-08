@@ -46,6 +46,11 @@ final class DictationSettings: ObservableObject {
         }
     }
 
+    /// 语音日记：监听期间把说过的话转写并追加到 ~/Desktop/语音日记/当天日期.txt。
+    @Published var journalEnabled: Bool {
+        didSet { UserDefaults.standard.set(journalEnabled, forKey: Self.journalEnabledKey) }
+    }
+
     static let defaultURL = "http://127.0.0.1:8001/v1/audio/transcriptions"
     static let defaultKeyCode: UInt32 = 2 // kVK_ANSI_D
     static let defaultFlags: UInt32 = UInt32(optionKey) // ⌥D
@@ -64,6 +69,7 @@ final class DictationSettings: ObservableObject {
     private static let activeOpacityKey = "dictation.activeOpacity"
     private static let waveformWidthKey = "dictation.waveform.width"
     private static let microphoneKey = "dictation.microphone.uid"
+    private static let journalEnabledKey = "dictation.journal.enabled"
 
     init() {
         let def = UserDefaults.standard
@@ -76,6 +82,7 @@ final class DictationSettings: ObservableObject {
         activeOpacity = def.object(forKey: Self.activeOpacityKey) as? Double ?? 1.0
         waveformWidth = def.object(forKey: Self.waveformWidthKey) as? Double ?? 167.0
         microphoneUID = def.string(forKey: Self.microphoneKey)
+        journalEnabled = def.object(forKey: Self.journalEnabledKey) as? Bool ?? true
         migrateHotkeyIfNeeded()
     }
 
