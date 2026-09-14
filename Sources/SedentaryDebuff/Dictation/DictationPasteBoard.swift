@@ -117,12 +117,4 @@ enum DictationPasteBoard {
     static func pressDeleteWord() {
         tapKey(51, flags: .maskAlternate)
     }
-
-    /// 清空当前输入框全部内容：⌘A 全选后按 ⌫ 删除。
-    static func pressClearAll() {
-        tapKey(0, flags: .maskCommand, characters: "a")
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-            tapKey(51, flags: [])
-        }
-    }
 }

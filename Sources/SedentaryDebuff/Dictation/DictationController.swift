@@ -32,7 +32,12 @@ final class DictationController: ObservableObject {
     private var isFlushing = false
     private var discardPendingOnStop = false
     private var lastError: String?
-    private var unpasted: [String] = []
+    /// 激活期间累积的待提交文本：只显示在光波下方，按提交键才整段贴到当前光标。
+    private var bufferLines: [String] = []
+    /// 已请求提交：等所有在途转写（含收尾段）落地后，一次性粘贴并转非激活。
+    private var commitRequested = false
+    /// 语音「发送」提交后是否补一次回车。
+    private var sendAfterCommit = false
     private var awaitingPermission = false
     /// 权限弹窗期间是否仍期望开启（锁屏/停止会清掉，避免授权回来后在锁屏时悄悄开麦）。
     private var shouldStartOnPermission = false
@@ -121,6 +126,7 @@ final class DictationController: ObservableObject {
         }
         applyHotkey()
         waveformPanel.setActiveOpacity(settings.activeOpacity)
+        waveformPanel.setEmptyBufferBehavior(settings.emptyBufferBehavior)
         waveformPanel.onWidthChange = { [weak self] width in
             self?.settings.waveformWidth = Double(width)
         }
@@ -187,6 +193,10 @@ final class DictationController: ObservableObject {
         DictationHotKey.registerFixedEnd { [weak self] in
             self?.toggle()
         }
+        // 固定 Home 键：清空尚未提交的缓冲文本。
+        DictationHotKey.registerFixedHome { [weak self] in
+            self?.clearBufferedText()
+        }
     }
 
     /// 快捷键：仅在「激活 / 非激活」之间切换；引擎未开启时先开启引擎并激活。
@@ -197,7 +207,7 @@ final class DictationController: ObservableObject {
             case .off:
                 self.requestStart()
             case .active:
-                self.setVoiceInactive()
+                self.requestCommit()
             case .inactive:
                 self.setVoiceActive()
             case .flushing:
@@ -225,12 +235,24 @@ final class DictationController: ObservableObject {
         }
     }
 
+    /// 固定 Home 键：清空尚未提交的缓冲文本。
+    func clearBufferedText() {
+        engineQueue.async { [weak self] in
+            self?.performClearCommand()
+        }
+    }
+
     func applyActiveOpacity() {
         waveformPanel.setActiveOpacity(settings.activeOpacity)
         DispatchQueue.main.async { [weak self] in
             guard let self, self.isInputActive else { return }
             self.waveformPanel.setActive(true)
         }
+    }
+
+    /// 菜单更改「空文本时」处理方式后调用：立即刷新面板占位/收起。
+    func applyEmptyBufferBehavior() {
+        waveformPanel.setEmptyBufferBehavior(settings.emptyBufferBehavior)
     }
 
     /// 菜单选择麦克风后调用：更新本次/下次会话要用的麦克风（nil = 跟随系统默认）。
@@ -301,7 +323,9 @@ final class DictationController: ObservableObject {
         isFlushing = false
         discardPendingOnStop = false
         lastError = nil
-        unpasted.removeAll()
+        commitRequested = false
+        sendAfterCommit = false
+        clearBuffer()
         generation += 1
         // 取消上一次可能仍在排队的启动重试，改用本次目标状态。
         autoBootPending = false
@@ -362,6 +386,7 @@ final class DictationController: ObservableObject {
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             self.waveformPanel.setActiveOpacity(self.settings.activeOpacity)
+            self.waveformPanel.setEmptyBufferBehavior(self.settings.emptyBufferBehavior)
             self.waveformPanel.setListening(true)
             self.waveformPanel.setWidth(CGFloat(self.settings.waveformWidth))
             self.waveformPanel.show()
@@ -374,6 +399,8 @@ final class DictationController: ObservableObject {
         let wasActive = currentState == .active
         CrashLog.write("[\(Date())] 停止引擎：state=\(currentState)\n")
         resetEngineBookkeeping()
+        commitRequested = false
+        sendAfterCommit = false
         isFlushing = true
         discardPendingOnStop = !wasActive
         setState(.flushing)
@@ -452,7 +479,9 @@ final class DictationController: ObservableObject {
         generation += 1 // 使锁屏前在途的转写结果失效，避免解锁后误上屏/误执行
         pending = 0
         lastError = nil
-        unpasted.removeAll()
+        commitRequested = false
+        sendAfterCommit = false
+        clearBuffer()
         setState(.off)
         setStatus("空闲")
         DispatchQueue.main.async { [weak self] in
@@ -477,7 +506,9 @@ final class DictationController: ObservableObject {
             isFlushing = false
             discardPendingOnStop = false
             lastError = nil
-            unpasted.removeAll()
+            commitRequested = false
+            sendAfterCommit = false
+            clearBuffer()
             currentState = .off
             requestStart()
             return
@@ -486,6 +517,7 @@ final class DictationController: ObservableObject {
         segmentSamples.removeAll()
         segmentStart = nil
         vad.reset()
+        clearBuffer()
         setState(.active)
         setStatus("输入中…")
         DispatchQueue.main.async { [weak self] in
@@ -495,24 +527,42 @@ final class DictationController: ObservableObject {
         }
     }
 
-    /// 激活 → 非激活（语音「over」或快捷键）。先把切换前还没触发转写的尾句强制送一次转写，
-    /// 再把积压文本（非「边说边贴」模式）落盘，再进入待命。
-    private func setVoiceInactive() {
-        guard currentState == .active else { return }
-        CrashLog.write("[\(Date())] 状态：激活 → 非激活\n")
+    /// 激活 → 提交（语音「over」或快捷键 ⌥D/End）。先把切换前还没触发转写的尾句
+    /// 强制送一次转写，等积压的在途转写全部落地后，再把整个缓冲一次性粘到当前光标，
+    /// 清空缓冲并进入非激活待命。光标此刻在哪就贴到哪，避免说的时候没聚焦输入框而白说。
+    private func requestCommit() {
+        guard currentState == .active || currentState == .inactive else { return }
+        guard !commitRequested else { return }
+        CrashLog.write("[\(Date())] 请求提交：state=\(currentState)\n")
+        commitRequested = true
         flushFinalSegment()
+        tryFinishCommit()
+    }
+
+    /// 在途转写全部返回后执行提交（由 handleResult 在 pending 归零时调用）。
+    private func tryFinishCommit() {
+        guard commitRequested, pending == 0 else { return }
+        finishCommit()
+    }
+
+    private func finishCommit() {
+        commitRequested = false
         segmentSamples.removeAll()
         segmentStart = nil
         vad.reset()
-        let pendingPaste = unpasted
-        unpasted.removeAll()
+        let text = takeBufferText()
+        let shouldSend = sendAfterCommit
+        sendAfterCommit = false
         setState(.inactive)
         setStatus("待命（按 \(hotkeyLabel) 重新激活）")
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             self.waveformPanel.setActive(false)
-            for text in pendingPaste {
+            if !text.isEmpty {
                 self.enqueuePaste(text)
+            }
+            if shouldSend {
+                self.pressReturnWhenPasteDrained(attempt: 0)
             }
         }
     }
@@ -616,7 +666,9 @@ final class DictationController: ObservableObject {
         generation += 1
         pending = 0
         lastError = nil
-        unpasted.removeAll()
+        commitRequested = false
+        sendAfterCommit = false
+        clearBuffer()
         setState(.off)
         setStatus("麦克风不可用，语音输入已停止（可稍后重新开始）")
         DispatchQueue.main.async { [weak self] in
@@ -706,8 +758,20 @@ final class DictationController: ObservableObject {
 
     private func flushFinalSegment() {
         guard !segmentSamples.isEmpty else { return }
+        // 停顿触发切段后，残留的收尾段通常只是尾随静音。若能量极低还发去转写，
+        // 提交/发送就得白等一个 STT 网络往返（约 1 秒）才粘贴，手感发滞。
+        let peak = segmentSamples.reduce(Float(0)) { max($0, abs($1)) }
+        CrashLog.write("[\(Date())] 收尾段 samples=\(segmentSamples.count) peak=\(peak)\n")
+        if peak < Self.silencePeakThreshold {
+            CrashLog.write("[\(Date())] 收尾段近乎静音，跳过转写\n")
+            segmentSamples.removeAll()
+            return
+        }
         finalizeSegment(force: true)
     }
+
+    /// 收尾段判定为「静音可跳过」的峰值门限，明显低于正常说话电平。
+    private static let silencePeakThreshold: Float = 0.01
 
     // MARK: - 转写结果
 
@@ -743,52 +807,63 @@ final class DictationController: ObservableObject {
             lastError = error.localizedDescription
             setStatus("转写失败：\(error.localizedDescription)")
         }
+        tryFinishCommit()
         finishIfNeeded()
     }
 
-    /// 按当前状态决定一段转写文本的去向：激活才上屏/执行指令；其余状态一律不识别唤醒词。
+    /// 按当前状态决定一段转写文本的去向：激活期间只累积到缓冲，提交时才整段上屏。
     private func handleTranscribed(_ text: String) {
         switch currentState {
-        case .active:
+        case .active, .inactive:
             if let match = Self.detectCommand(text) {
-                // 「发送」贴在句子末尾命中时，先把命令词前面的正文加入积压，
-                // 发送流程会把积压内容全部粘贴后统一回车。
+                // 「发送」贴在句子末尾命中时，先把命令词前面的正文加入缓冲，
+                // 提交流程会把缓冲内容整体粘贴后统一回车。
                 if let body = match.body {
-                    unpasted.append(body)
+                    appendBuffer(body)
                     journal.append(activeText: body)
                 }
                 perform(match.command)
             } else {
-                unpasted.append(text)
+                appendBuffer(text)
                 journal.append(activeText: text)
-                if settings.livePaste {
-                    pasteNextUnpasted()
-                }
-            }
-        case .inactive:
-            // 非激活状态不会再发起新的转写；此处收到的只可能是「激活→非激活」瞬间
-            // 已送出的在途转写 / 强制收尾段。它们说的都是切换前的话，仍按激活语义处理：
-            // 命中 clear/删除/发送 等指令照常执行，普通文本照常上屏，避免「最后一句
-            // 还没处理完就待命」丢指令或把指令词当正文粘进去。
-            if let match = Self.detectCommand(text) {
-                if let body = match.body {
-                    unpasted.append(body)
-                    journal.append(activeText: body)
-                }
-                perform(match.command)
-            } else {
-                unpasted.append(text)
-                journal.append(activeText: text)
-                pasteNextUnpasted()
             }
         case .flushing:
             // 从激活停止时收尾的文本仍要落盘；从非激活停止时丢弃待命期间的转写。
             if !discardPendingOnStop {
-                unpasted.append(text)
+                appendBuffer(text)
                 journal.append(activeText: text)
             }
         case .off:
             break
+        }
+    }
+
+    // MARK: - 缓冲
+
+    /// 追加一段转写文本到面板缓冲（同段落内的换行保留，首尾空行裁掉）。
+    private func appendBuffer(_ text: String) {
+        let line = text.trimmingCharacters(in: .newlines)
+        guard !line.isEmpty else { return }
+        bufferLines.append(line)
+        updateBufferUI()
+    }
+
+    /// 取出并清空缓冲文本：各段以换行拼接后整段粘贴，保持逐句成行。
+    private func takeBufferText() -> String {
+        let text = bufferLines.joined(separator: "\n")
+        clearBuffer()
+        return text
+    }
+
+    private func clearBuffer() {
+        bufferLines.removeAll()
+        updateBufferUI()
+    }
+
+    private func updateBufferUI() {
+        let lines = bufferLines
+        DispatchQueue.main.async { [weak self] in
+            self?.waveformPanel.setBuffer(lines)
         }
     }
 
@@ -812,8 +887,17 @@ final class DictationController: ObservableObject {
             return CommandMatch(command: .clear, body: nil)
         }
         guard normalized.hasSuffix("发送") else { return nil }
-        let body = String(normalized.dropLast(2))
-        return CommandMatch(command: .send, body: body.isEmpty ? nil : body)
+        // 用原文取「发送」前的正文，保留原始大小写与内部标点，避免把正文转成小写。
+        return CommandMatch(command: .send, body: originalBody(in: text, commandLength: 2))
+    }
+
+    /// 从原文首尾去空白/标点后，取命令词前面的正文（保留原始大小写）。
+    private static func originalBody(in text: String, commandLength: Int) -> String? {
+        let trimSet = CharacterSet.whitespacesAndNewlines.union(.punctuationCharacters)
+        let trimmed = text.trimmingCharacters(in: trimSet)
+        guard trimmed.count > commandLength else { return nil }
+        let body = String(trimmed.dropLast(commandLength)).trimmingCharacters(in: trimSet)
+        return body.isEmpty ? nil : body
     }
 
     private static func normalizedCommand(_ text: String) -> String {
@@ -827,7 +911,7 @@ final class DictationController: ObservableObject {
     private func perform(_ command: VoiceCommand) {
         switch command {
         case .deactivate:
-            setVoiceInactive()
+            requestCommit()
         case .send:
             performSendCommand()
         case .deleteWord:
@@ -837,13 +921,10 @@ final class DictationController: ObservableObject {
         }
     }
 
-    /// 识别到「清空/clear」指令：清空当前输入框全部内容，继续输入。
+    /// 识别到「清空/clear」指令：清空 debuff 缓冲区里尚未提交的文本，继续输入。
     private func performClearCommand() {
-        CrashLog.write("[\(Date())] 指令：清空 → 主线程发 ⌘A+⌫ state=\(currentState)\n")
-        DispatchQueue.main.async {
-            DictationPasteBoard.pressClearAll()
-            CrashLog.write("[\(Date())] 已调用 pressClearAll\n")
-        }
+        CrashLog.write("[\(Date())] 指令：清空 → 清空缓冲区 lines=\(bufferLines.count) state=\(currentState)\n")
+        clearBuffer()
     }
 
     /// 识别到「删除/撤销」指令：在当前焦点按一次 ⌥⌫ 删除一个词，继续输入。
@@ -855,27 +936,14 @@ final class DictationController: ObservableObject {
         }
     }
 
-    /// 识别到「发送」指令：粘贴积压文本后发一次回车，并把控件切到非激活待命（不再退出）。
-    /// 刚切到非激活时若「发送」收尾段才返回（currentState == .inactive），同样执行发送，
-    /// 只是无需再切换状态。
+    /// 识别到「发送」指令：把缓冲整段粘贴到当前光标后发一次回车，并进入非激活待命。
+    /// 先请求提交（等收尾段落地、一次性粘贴），队列清空后再补回车。
     private func performSendCommand() {
         guard currentState == .active || currentState == .inactive else { return }
-        CrashLog.write("[\(Date())] 指令：发送 → 回车并进入非激活\n")
-        segmentSamples.removeAll()
-        segmentStart = nil
-        vad.reset()
-        let pendingPaste = unpasted
-        unpasted.removeAll()
-        setState(.inactive)
-        setStatus("已发送（按 \(hotkeyLabel) 继续输入）")
-        DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
-            self.waveformPanel.setActive(false)
-            for text in pendingPaste {
-                self.enqueuePaste(text)
-            }
-            self.pressReturnWhenPasteDrained(attempt: 0)
-        }
+        guard !commitRequested else { return }
+        CrashLog.write("[\(Date())] 指令：发送 → 提交粘贴后回车\n")
+        sendAfterCommit = true
+        requestCommit()
     }
 
     /// 等粘贴队列里先前的内容落盘后，再发一次回车，避免回车比粘贴先到而漏发。
@@ -897,9 +965,8 @@ final class DictationController: ObservableObject {
 
     private func finishIfNeeded() {
         guard isFlushing, pending == 0 else { return }
-        while !unpasted.isEmpty {
-            pasteNextUnpasted()
-        }
+        // 停止引擎时，把缓冲里还没提交的内容整段落盘，避免没按键就停麦导致白说。
+        let text = takeBufferText()
         isFlushing = false
         setState(.off)
         if let lastError {
@@ -909,15 +976,11 @@ final class DictationController: ObservableObject {
         }
         self.lastError = nil
         DispatchQueue.main.async { [weak self] in
-            self?.waveformPanel.hide()
-        }
-    }
-
-    private func pasteNextUnpasted() {
-        guard !unpasted.isEmpty else { return }
-        let text = unpasted.removeFirst()
-        DispatchQueue.main.async { [weak self] in
-            self?.enqueuePaste(text)
+            guard let self else { return }
+            if !text.isEmpty {
+                self.enqueuePaste(text)
+            }
+            self.waveformPanel.hide()
         }
     }
 

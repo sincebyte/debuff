@@ -34,8 +34,6 @@ final class DebuffStatusBarController: NSObject, NSMenuDelegate {
     private var itemJournalOpen: NSMenuItem!
     private var itemJournalTodayText: NSMenuItem!
     private var itemJournalSavedTime: NSMenuItem!
-    private var itemDictationPasteLive: NSMenuItem!
-    private var itemDictationPasteEnd: NSMenuItem!
     private var itemDictationURL: NSMenuItem!
     private var itemDictationHotkey: NSMenuItem!
     private var itemMicParent: NSMenuItem!
@@ -44,6 +42,7 @@ final class DebuffStatusBarController: NSObject, NSMenuDelegate {
     private var maxSegmentItems: [NSMenuItem] = []
     private var activeOpacityItems: [NSMenuItem] = []
     private var waveformWidthItems: [NSMenuItem] = []
+    private var emptyBufferBehaviorItems: [NSMenuItem] = []
     private var hotkeyPresetItems: [NSMenuItem] = []
 
     private var updateTimer: AnyCancellable?
@@ -205,8 +204,8 @@ final class DebuffStatusBarController: NSObject, NSMenuDelegate {
         itemDictationStatus = makeDisabled("")
         rootMenu.addItem(itemDictationStatus)
 
-        itemDictationHint = makeDisabled("激活中直接说话上屏 · 说「over」待命 · 句末带「发送」即回车发送并待命")
-        itemDictationHint.toolTip = "语音指令只在激活状态识别；句子末尾带「发送」即回车发送并待命，其余指令需整句命中。麦克风开启即进入激活输入；主快捷键 \(DictationHotKey.label(keyCode: s.hotkeyKeyCode, flags: s.hotkeyFlags)) 与固定 End 键都在激活/非激活之间切换，非激活待命只驱动波形不做上屏识别（语音日记也只记录激活状态转写的内容，不会后台转写待命期的杂音）。上方菜单项负责开启/关停麦克风。"
+        itemDictationHint = makeDisabled("激活中说话，文字先显示在光波下方 · 按 \(DictationHotKey.label(keyCode: s.hotkeyKeyCode, flags: s.hotkeyFlags))/End 粘贴待命 · Home 清空")
+        itemDictationHint.toolTip = "激活期间转写的文字不再直接粘贴，而是逐段显示在光波面板下方的滚动区（鼠标悬停即可上下滚轮浏览），上下边界渐隐；把光标放进目标输入框后，按主快捷键 \(DictationHotKey.label(keyCode: s.hotkeyKeyCode, flags: s.hotkeyFlags)) 或固定 End 键，会把缓冲内容整段粘贴到当前光标、清空缓冲并进入非激活待命。按固定 Home 键清空尚未提交的缓冲文本。语音「over」等同提交；「清空/clear」清空缓冲文本；「发送」把缓冲粘贴到当前光标后回车；「删除/撤销」仍在当前输入框删一个词。非激活待命只驱动波形不做识别（语音日记也只记录激活状态转写的内容）。缓冲为空时可在「设置 → 空文本时」选择保留非激活文本框或收起只留波形。上方菜单项负责开启/关停麦克风。"
         rootMenu.addItem(itemDictationHint)
 
         itemJournalToggle = NSMenuItem(title: journalToggleTitle, action: #selector(toggleJournal), keyEquivalent: "")
@@ -226,18 +225,6 @@ final class DebuffStatusBarController: NSObject, NSMenuDelegate {
         rootMenu.addItem(itemJournalSavedTime)
 
         let settingsMenu = NSMenu()
-
-        settingsMenu.addItem(subHeader("粘贴方式"))
-        itemDictationPasteLive = NSMenuItem(title: "实时（边说边粘）", action: #selector(selectPasteMode(_:)), keyEquivalent: "")
-        itemDictationPasteLive.target = self
-        itemDictationPasteLive.representedObject = true
-        itemDictationPasteLive.state = s.livePaste ? .on : .off
-        settingsMenu.addItem(itemDictationPasteLive)
-        itemDictationPasteEnd = NSMenuItem(title: "结束后统一粘贴", action: #selector(selectPasteMode(_:)), keyEquivalent: "")
-        itemDictationPasteEnd.target = self
-        itemDictationPasteEnd.representedObject = false
-        itemDictationPasteEnd.state = s.livePaste ? .off : .on
-        settingsMenu.addItem(itemDictationPasteEnd)
 
         settingsMenu.addItem(subHeader("停顿判定（秒）"))
         for v in DictationSettings.pausePresets {
@@ -279,6 +266,16 @@ final class DebuffStatusBarController: NSObject, NSMenuDelegate {
             waveformWidthItems.append(it)
         }
 
+        settingsMenu.addItem(subHeader("空文本时"))
+        for behavior in DictationSettings.EmptyBufferBehavior.allCases {
+            let it = NSMenuItem(title: emptyBufferBehaviorLabel(behavior), action: #selector(selectEmptyBufferBehavior(_:)), keyEquivalent: "")
+            it.target = self
+            it.representedObject = behavior.rawValue
+            it.state = s.emptyBufferBehavior == behavior ? .on : .off
+            settingsMenu.addItem(it)
+            emptyBufferBehaviorItems.append(it)
+        }
+
         settingsMenu.addItem(subHeader("STT 服务地址"))
         itemDictationURL = makeDisabled(s.sttURLString)
         settingsMenu.addItem(itemDictationURL)
@@ -296,19 +293,18 @@ final class DebuffStatusBarController: NSObject, NSMenuDelegate {
             settingsMenu.addItem(it)
             hotkeyPresetItems.append(it)
         }
-        settingsMenu.addItem(makeDisabled("End（固定）＝ 激活/非激活切换"))
-
-        settingsMenu.addItem(subHeader("麦克风"))
-        itemMicParent = NSMenuItem(title: microphoneTitle, action: nil, keyEquivalent: "")
-        micMenu = NSMenu()
-        micMenu.delegate = self
-        itemMicParent.submenu = micMenu
-        settingsMenu.addItem(itemMicParent)
-        rebuildMicMenu()
+        settingsMenu.addItem(makeDisabled("End（固定）＝ 激活/非激活切换 · Home（固定）＝ 清空缓冲"))
 
         let settingsParent = NSMenuItem(title: "设置", action: nil, keyEquivalent: "")
         settingsParent.submenu = settingsMenu
         rootMenu.addItem(settingsParent)
+
+        itemMicParent = NSMenuItem(title: microphoneTitle, action: nil, keyEquivalent: "")
+        micMenu = NSMenu()
+        micMenu.delegate = self
+        itemMicParent.submenu = micMenu
+        rootMenu.addItem(itemMicParent)
+        rebuildMicMenu()
 
         rootMenu.addItem(NSMenuItem(title: "测试服务连接", action: #selector(testDictationConnection), keyEquivalent: "").apply { $0.target = self })
         rootMenu.addItem(NSMenuItem(title: "辅助功能设置…", action: #selector(openAccessibilitySettings), keyEquivalent: "").apply { $0.target = self })
@@ -470,12 +466,6 @@ final class DebuffStatusBarController: NSObject, NSMenuDelegate {
         }
     }
 
-    @objc private func selectPasteMode(_ sender: NSMenuItem) {
-        let live = (sender.representedObject as? Bool) ?? true
-        services.dictation.settings.livePaste = live
-        refreshDictationItems()
-    }
-
     @objc private func selectPause(_ sender: NSMenuItem) {
         guard let n = sender.representedObject as? NSNumber else { return }
         services.dictation.settings.pauseSilenceSeconds = n.doubleValue
@@ -507,6 +497,21 @@ final class DebuffStatusBarController: NSObject, NSMenuDelegate {
         case 35: return "35（圆点）"
         case 167: return "167（标准）"
         default: return "\(Int(v))"
+        }
+    }
+
+    @objc private func selectEmptyBufferBehavior(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String,
+              let behavior = DictationSettings.EmptyBufferBehavior(rawValue: raw) else { return }
+        services.dictation.settings.emptyBufferBehavior = behavior
+        services.dictation.applyEmptyBufferBehavior()
+        refreshDictationItems()
+    }
+
+    private func emptyBufferBehaviorLabel(_ behavior: DictationSettings.EmptyBufferBehavior) -> String {
+        switch behavior {
+        case .inactive: return "保留文本框（非激活显示）"
+        case .collapse: return "收起文本框与按钮"
         }
     }
 
@@ -692,8 +697,6 @@ final class DebuffStatusBarController: NSObject, NSMenuDelegate {
         itemDictationURL.title = s.sttURLString
         itemDictationHotkey.title = DictationHotKey.label(keyCode: s.hotkeyKeyCode, flags: s.hotkeyFlags)
         itemMicParent.title = microphoneTitle
-        itemDictationPasteLive.state = s.livePaste ? .on : .off
-        itemDictationPasteEnd.state = s.livePaste ? .off : .on
         for it in pauseOptionItems {
             guard let n = it.representedObject as? NSNumber else { continue }
             it.state = abs(n.doubleValue - s.pauseSilenceSeconds) < 0.0001 ? .on : .off
@@ -709,6 +712,10 @@ final class DebuffStatusBarController: NSObject, NSMenuDelegate {
         for it in waveformWidthItems {
             guard let n = it.representedObject as? NSNumber else { continue }
             it.state = abs(n.doubleValue - s.waveformWidth) < 0.0001 ? .on : .off
+        }
+        for it in emptyBufferBehaviorItems {
+            guard let raw = it.representedObject as? String else { continue }
+            it.state = (raw == s.emptyBufferBehavior.rawValue) ? .on : .off
         }
         for it in hotkeyPresetItems {
             guard let preset = it.representedObject as? DictationHotKey.Preset else { continue }

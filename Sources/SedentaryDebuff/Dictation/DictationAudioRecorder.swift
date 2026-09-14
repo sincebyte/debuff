@@ -1,14 +1,18 @@
 import AVFoundation
 import CoreAudio
+import ExceptionCatcher
 import Foundation
 
 enum DictationRecorderError: LocalizedError {
     case invalidInputFormat
+    case tapCreationFailed(String)
 
     var errorDescription: String? {
         switch self {
         case .invalidInputFormat:
             return "无法读取输入设备的音频格式"
+        case .tapCreationFailed(let reason):
+            return "创建麦克风音频采集失败：\(reason)"
         }
     }
 }
@@ -215,9 +219,20 @@ final class DictationAudioRecorder {
             throw DictationRecorderError.invalidInputFormat
         }
         sampleRate = format.sampleRate
-        input.installTap(onBus: 0, bufferSize: 4096, format: format) { [weak self] buffer, _ in
-            self?.markBufferReceived()
-            self?.onBuffer?(buffer)
+        // installTap 在格式与硬件不匹配时抛的是 Objective-C 异常（NSException），
+        // Swift 的 do/catch 接不住，会直接 terminate 进程（典型场景：解锁唤醒后
+        // 新引擎的 inputNode 还报着过期的 44100/2 格式，而硬件已就绪为别的格式）。
+        // 用 ObjC 桥接把它转成可捕获的错误，交给上层的退避重试自愈。
+        var tapError: NSString?
+        let installed = DBCatchException({
+            input.installTap(onBus: 0, bufferSize: 4096, format: format) { [weak self] buffer, _ in
+                self?.markBufferReceived()
+                self?.onBuffer?(buffer)
+            }
+        }, &tapError)
+        guard installed else {
+            resetBufferClock()
+            throw DictationRecorderError.tapCreationFailed(tapError as String? ?? "未知原因")
         }
         tapInstalled = true
         engine.prepare()

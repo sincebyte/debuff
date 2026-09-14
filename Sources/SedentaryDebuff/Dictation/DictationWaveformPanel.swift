@@ -4,8 +4,26 @@ import SwiftUI
 private let waveformMinWidth: CGFloat = 35
 private let waveformMaxWidth: CGFloat = 400
 private let waveformDefaultWidth: CGFloat = 167
-/// 整体 UI 高度；内部音柱、圆角与外框都随该高度等比缩放。
-private let waveformHeight: CGFloat = 28
+/// 音柱栏高度（顶部固定区）：紧贴音柱，减少上下边框间的留白。
+private let waveformHeight: CGFloat = 20
+/// 音柱与缓冲文本区间距。
+private let bufferSpacing: CGFloat = 2
+/// 缓冲文本区高度：缓冲非空时向下展开，内部自动滚到最新。
+private let bufferAreaHeight: CGFloat = 93
+/// 面板外围底板的内边距（与视图层一致，保证高度精确匹配）。
+private let boardPadding: CGFloat = 4
+/// 顶部底板 + 音柱栏（含与文本区间距）留给拖拽，鼠标事件穿透给面板内容视图。
+private let passThroughTopHeight: CGFloat = boardPadding + waveformHeight + bufferSpacing
+/// 右缘留给拖拽调宽。
+private let passThroughRightWidth: CGFloat = 12
+/// 面板展开后的固定高度：波形 + 文本区，整体处于底板之上。
+private var waveformPanelFullHeight: CGFloat {
+    waveformHeight + bufferSpacing + bufferAreaHeight + boardPadding * 2
+}
+/// 收起文本区时的面板高度：只有底板包裹的波形。
+private var waveformPanelCollapsedHeight: CGFloat {
+    waveformHeight + boardPadding * 2
+}
 
 final class DictationWaveformPanel {
     private var panel: NSPanel?
@@ -55,14 +73,45 @@ final class DictationWaveformPanel {
         panel.setFrame(frame, display: true)
     }
 
+    /// 更新缓冲文本：非空时正常亮度；为空时按配置保留非激活占位或收起。
+    func setBuffer(_ lines: [String]) {
+        viewState.bufferLines = lines
+        viewState.showsBuffer = !lines.isEmpty
+        updatePanelHeight()
+    }
+
+    /// 缓冲为空时的处理方式：保留非激活文本框，还是收起只留波形。
+    func setEmptyBufferBehavior(_ behavior: DictationSettings.EmptyBufferBehavior) {
+        viewState.keepsEmptyPlaceholder = (behavior == .inactive)
+        updatePanelHeight()
+    }
+
+    /// 保持面板顶边不动，按「是否展开文本区」调整高度。
+    private func updatePanelHeight() {
+        guard let panel else { return }
+        let expanded = viewState.showsBuffer || viewState.keepsEmptyPlaceholder
+        let target = expanded ? waveformPanelFullHeight : waveformPanelCollapsedHeight
+        var frame = panel.frame
+        guard abs(frame.height - target) > 0.5 else { return }
+        let top = frame.origin.y + frame.height
+        frame.size.height = target
+        frame.origin.y = top - target
+        panel.setFrame(frame, display: true)
+    }
+
     func hide() {
         panel?.orderOut(nil)
     }
 
     private func ensurePanel() {
         guard panel == nil else { return }
-        let size = NSSize(width: currentWidth, height: waveformHeight)
-        let host = PassThroughHostingView(rootView: DictationWaveformView(data: data, state: viewState))
+        let size = NSSize(width: currentWidth, height: waveformPanelFullHeight)
+        let host = PassThroughHostingView(
+            rootView: DictationWaveformView(
+                data: data,
+                state: viewState
+            )
+        )
         host.frame = NSRect(origin: .zero, size: size)
         host.autoresizingMask = [.width, .height]
         let content = DraggableContentView(frame: NSRect(origin: .zero, size: size))
@@ -101,6 +150,7 @@ final class DictationWaveformPanel {
             guard let window = notification.object as? NSWindow else { return }
             self?.onWidthChange?(window.frame.width)
         }
+        updatePanelHeight()
     }
 
     private func restorePosition(_ panel: NSPanel) {
@@ -137,10 +187,22 @@ final class DictationWaveformPanel {
     }
 }
 
-/// 内容视图不拦截鼠标事件，保证拖拽事件落到 `DraggableContentView`。
+/// 顶部音柱栏与右缘不拦截鼠标事件，让拖拽移动/拖拽调宽落到 `DraggableContentView`；
+/// 其余区域（缓冲文本、下方按钮）交给 SwiftUI 处理滚轮滚动与点击。
+/// `hitTest` 的坐标是 superview 坐标系，与 `frame` 一致。
 private final class PassThroughHostingView: NSHostingView<DictationWaveformView> {
     override func hitTest(_ point: NSPoint) -> NSView? {
-        nil
+        let topEdge = frame.maxY - passThroughTopHeight
+        let rightEdge = frame.maxX - passThroughRightWidth
+        if point.y > topEdge || point.x > rightEdge {
+            return nil
+        }
+        return super.hitTest(point)
+    }
+
+    /// 面板非激活：首次点击也要落到按钮上，不能只用于激活窗口。
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
+        true
     }
 }
 

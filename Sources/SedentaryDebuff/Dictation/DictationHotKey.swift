@@ -21,9 +21,15 @@ enum DictationHotKey {
     static let fixedEndFlags: UInt32 = 0
     static var fixedEndLabel: String { label(keyCode: fixedEndKeyCode, flags: fixedEndFlags) }
 
+    /// 固定的 Home 键（kVK_Home），常驻注册，用于清空尚未提交的缓冲文本。
+    static let fixedHomeKeyCode: UInt32 = 115
+    static let fixedHomeFlags: UInt32 = 0
+    static var fixedHomeLabel: String { label(keyCode: fixedHomeKeyCode, flags: fixedHomeFlags) }
+
     private static let signature: OSType = 0x44494354
     private static let mainSlot: UInt32 = 1
     private static let fixedEndSlot: UInt32 = 2
+    private static let fixedHomeSlot: UInt32 = 3
 
     private static var eventHandlerRef: EventHandlerRef?
     private static var hotKeyRefs: [UInt32: EventHotKeyRef] = [:]
@@ -41,9 +47,16 @@ enum DictationHotKey {
         setSlot(fixedEndSlot, keyCode: fixedEndKeyCode, flags: fixedEndFlags, onPress: onPress)
     }
 
+    /// 注册固定的 Home 键（清空缓冲）。重复调用会先注销旧注册再重新注册。
+    @discardableResult
+    static func registerFixedHome(onPress: @escaping () -> Void) -> Bool {
+        setSlot(fixedHomeSlot, keyCode: fixedHomeKeyCode, flags: fixedHomeFlags, onPress: onPress)
+    }
+
     static func unregister() {
         unregisterSlot(mainSlot)
         unregisterSlot(fixedEndSlot)
+        unregisterSlot(fixedHomeSlot)
         if let eventHandlerRef {
             RemoveEventHandler(eventHandlerRef)
             self.eventHandlerRef = nil
@@ -120,7 +133,7 @@ enum DictationHotKey {
         12: "Q", 15: "R", 1: "S", 17: "T", 32: "U", 9: "V", 13: "W", 7: "X",
         16: "Y", 6: "Z",
         29: "0", 18: "1", 19: "2", 20: "3", 21: "4", 23: "5", 22: "6", 26: "7", 28: "8", 25: "9",
-        49: "空格", 36: "回车", 48: "Tab", 53: "Esc", 119: "End",
+        49: "空格", 36: "回车", 48: "Tab", 53: "Esc", 119: "End", 115: "Home",
         122: "F1", 120: "F2", 99: "F3", 118: "F4", 96: "F5", 97: "F6", 98: "F7",
         100: "F8", 101: "F9", 109: "F10", 103: "F11", 111: "F12",
         123: "←", 124: "→", 125: "↓", 126: "↑",

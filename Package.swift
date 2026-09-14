@@ -12,8 +12,13 @@ let package = Package(
         .executable(name: "VoiceIME", targets: ["VoiceIME"]),
     ],
     targets: [
+        .target(
+            name: "ExceptionCatcher",
+            path: "Sources/ExceptionCatcher"
+        ),
         .executableTarget(
             name: "SedentaryDebuff",
+            dependencies: ["ExceptionCatcher"],
             path: "Sources/SedentaryDebuff",
             resources: [
                 .process("Resources"),

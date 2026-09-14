@@ -15,10 +15,6 @@ final class DictationSettings: ObservableObject {
         didSet { UserDefaults.standard.set(NSNumber(value: hotkeyFlags), forKey: Self.hotkeyFlagsKey) }
     }
 
-    @Published var livePaste: Bool {
-        didSet { UserDefaults.standard.set(livePaste, forKey: Self.livePasteKey) }
-    }
-
     @Published var pauseSilenceSeconds: Double {
         didSet { UserDefaults.standard.set(pauseSilenceSeconds, forKey: Self.pauseSilenceKey) }
     }
@@ -52,10 +48,22 @@ final class DictationSettings: ObservableObject {
         didSet { UserDefaults.standard.set(journalEnabled, forKey: Self.journalEnabledKey) }
     }
 
+    /// 缓冲为空时文本框与按钮的处理方式。
+    enum EmptyBufferBehavior: String, CaseIterable {
+        /// 保留文本框与按钮，仅以非激活（降低透明度）状态呈现。
+        case inactive
+        /// 收起文本框与按钮，只保留波形。
+        case collapse
+    }
+
+    @Published var emptyBufferBehavior: EmptyBufferBehavior {
+        didSet { UserDefaults.standard.set(emptyBufferBehavior.rawValue, forKey: Self.emptyBufferBehaviorKey) }
+    }
+
     static let defaultURL = "http://127.0.0.1:8001/v1/audio/transcriptions"
     static let defaultKeyCode: UInt32 = 2 // kVK_ANSI_D
     static let defaultFlags: UInt32 = UInt32(optionKey) // ⌥D
-    static let pausePresets: [Double] = [0.4, 0.6, 0.8, 1.0, 1.5, 2.0]
+    static let pausePresets: [Double] = [0.4, 0.6, 0.8, 1.0, 1.5, 2.0, 3.0, 4.0, 5.0]
     static let maxSegmentPresets: [Double] = [5, 10, 15, 20, 30]
     static let activeOpacityPresets: [Double] = [0.5, 0.65, 0.8, 1.0]
     static let waveformWidthPresets: [Double] = [35, 60, 100, 167, 240, 320]
@@ -64,26 +72,27 @@ final class DictationSettings: ObservableObject {
     private static let hotkeyKeyCodeKey = "dictation.hotkeyKeyCode"
     private static let hotkeyFlagsKey = "dictation.hotkeyFlags"
     private static let hotkeyMigratedKey = "dictation.hotkeyMigrated"
-    private static let livePasteKey = "dictation.livePaste"
     private static let pauseSilenceKey = "dictation.pauseSilence"
     private static let maxSegmentKey = "dictation.maxSegment"
     private static let activeOpacityKey = "dictation.activeOpacity"
     private static let waveformWidthKey = "dictation.waveform.width"
     private static let microphoneKey = "dictation.microphone.uid"
     private static let journalEnabledKey = "dictation.journal.enabled"
+    private static let emptyBufferBehaviorKey = "dictation.emptyBufferBehavior"
 
     init() {
         let def = UserDefaults.standard
         sttURLString = def.string(forKey: Self.sttURLKey) ?? Self.defaultURL
         hotkeyKeyCode = (def.object(forKey: Self.hotkeyKeyCodeKey) as? NSNumber)?.uint32Value ?? Self.defaultKeyCode
         hotkeyFlags = (def.object(forKey: Self.hotkeyFlagsKey) as? NSNumber)?.uint32Value ?? Self.defaultFlags
-        livePaste = def.object(forKey: Self.livePasteKey) as? Bool ?? true
         pauseSilenceSeconds = def.object(forKey: Self.pauseSilenceKey) as? Double ?? 1.0
         maxSegmentSeconds = def.object(forKey: Self.maxSegmentKey) as? Double ?? 10.0
         activeOpacity = def.object(forKey: Self.activeOpacityKey) as? Double ?? 1.0
         waveformWidth = def.object(forKey: Self.waveformWidthKey) as? Double ?? 167.0
         microphoneUID = def.string(forKey: Self.microphoneKey)
         journalEnabled = def.object(forKey: Self.journalEnabledKey) as? Bool ?? true
+        emptyBufferBehavior = def.string(forKey: Self.emptyBufferBehaviorKey)
+            .flatMap(EmptyBufferBehavior.init(rawValue:)) ?? .inactive
         migrateHotkeyIfNeeded()
     }
 
