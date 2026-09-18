@@ -3,12 +3,15 @@ import Foundation
 enum DictationError: LocalizedError {
     case formatUnavailable
     case transcriptionFailed(String)
+    case cleaningFailed(String)
 
     var errorDescription: String? {
         switch self {
         case .formatUnavailable:
             return "无法创建 16kHz 单声道音频格式"
         case .transcriptionFailed(let message):
+            return message
+        case .cleaningFailed(let message):
             return message
         }
     }

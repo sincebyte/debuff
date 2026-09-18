@@ -61,6 +61,37 @@ final class DictationWaveformPanel {
         viewState.isListening = listening
     }
 
+    /// 有在途转写时波形区铺满转译进度条。estimatedDuration 为本次音频的预计耗时（秒），
+    /// 用于按语音长短伸缩缓动曲线；已在 loading 时取较大值，避免新段落让进度提前逼近满格。
+    func setTranscribing(_ transcribing: Bool, estimatedDuration: TimeInterval? = nil) {
+        if let estimatedDuration {
+            viewState.loadingEstimatedDuration = transcribing && viewState.isTranscribing
+                ? max(viewState.loadingEstimatedDuration, estimatedDuration)
+                : estimatedDuration
+        }
+        viewState.isTranscribing = transcribing
+    }
+
+    /// 清整理（第二阶段）进行中：进度条接着转译阶段继续推进，文案切换为「整理中」。
+    func setCleaning(_ cleaning: Bool, estimatedDuration: TimeInterval? = nil) {
+        if let estimatedDuration {
+            viewState.cleaningEstimatedDuration = cleaning && viewState.isCleaning
+                ? max(viewState.cleaningEstimatedDuration, estimatedDuration)
+                : estimatedDuration
+        }
+        viewState.isCleaning = cleaning
+    }
+
+    /// 是否启用「转译 → 清整理」两段式进度融合。
+    func setCleanupFused(_ fused: Bool) {
+        viewState.cleanupFused = fused
+    }
+
+    /// 临近最大切段的倒计时秒数（nil 表示不在预警窗口）。
+    func setCutCountdown(_ seconds: Int?) {
+        viewState.cutCountdown = seconds
+    }
+
     func setActiveOpacity(_ value: Double) {
         viewState.activeOpacity = value
     }

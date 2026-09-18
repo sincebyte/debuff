@@ -18,6 +18,7 @@ final class DictationController: ObservableObject {
 
     private let recorder = DictationAudioRecorder()
     private let transcriber = DictationTranscriber()
+    private let cleaner = DictationCleaner()
     private let journal: VoiceJournal
     private let engineQueue = DispatchQueue(label: "dictation.engine")
     private let vad = DictationVAD(config: DictationVAD.Config())
@@ -32,8 +33,15 @@ final class DictationController: ObservableObject {
     private var isFlushing = false
     private var discardPendingOnStop = false
     private var lastError: String?
-    /// 激活期间累积的待提交文本：只显示在光波下方，按提交键才整段贴到当前光标。
-    private var bufferLines: [String] = []
+    /// 当前片段距最大切段的剩余秒数（5…1，进入预警窗口时非 nil；engineQueue 独占访问）。
+    private var cutCountdown: Int?
+    /// 激活期间累积的待提交文本：只显示在光波下方，按提交键整段贴到当前光标后清空。
+    /// 每段转写是一个 block，带「是否已清整理」标记：清整理时把所有未整理的 block
+    /// 拉通拼在一起交给大模型处理，成功后合并回一个已整理 block，避免重复送模型。
+    private var bufferBlocks: [BufferBlock] = []
+    /// 清整理在途标记与请求令牌（令牌用于在停麦/清空后作废过期回调）。
+    private var cleanupInFlight = false
+    private var cleanupToken = 0
     /// 已请求提交：等所有在途转写（含收尾段）落地后，一次性粘贴并转非激活。
     private var commitRequested = false
     /// 语音「发送」提交后是否补一次回车。
@@ -82,6 +90,8 @@ final class DictationController: ObservableObject {
     private let waveformPanel: DictationWaveformPanel
 
     private static let minSegmentSeconds = 0.5
+    /// 距离最大切段还剩多少秒时进入预警（指示点变灰）。
+    private static let cutWarningSeconds: Double = 5
 
     /// 识别到的语音指令（仅激活状态识别）：每条指令对应一个固定动作。
     private enum VoiceCommand {
@@ -96,6 +106,13 @@ final class DictationController: ObservableObject {
     private struct CommandMatch {
         let command: VoiceCommand
         let body: String?
+    }
+
+    /// 缓冲里的一段文本：转写先以「未整理」入队，清整理成功后合并为「已整理」。
+    private struct BufferBlock {
+        let id: UUID
+        var text: String
+        var isCleaned: Bool
     }
 
     init(settings: DictationSettings) {
@@ -127,6 +144,7 @@ final class DictationController: ObservableObject {
         applyHotkey()
         waveformPanel.setActiveOpacity(settings.activeOpacity)
         waveformPanel.setEmptyBufferBehavior(settings.emptyBufferBehavior)
+        waveformPanel.setCleanupFused(cleanupReady)
         waveformPanel.onWidthChange = { [weak self] width in
             self?.settings.waveformWidth = Double(width)
         }
@@ -255,6 +273,14 @@ final class DictationController: ObservableObject {
         waveformPanel.setEmptyBufferBehavior(settings.emptyBufferBehavior)
     }
 
+    /// 菜单更改「清整理」配置后调用：刷新进度条两段式融合，并对尚未整理的缓冲补一次清整理。
+    func applyCleanupSettings() {
+        waveformPanel.setCleanupFused(cleanupReady)
+        engineQueue.async { [weak self] in
+            self?.scheduleCleanupIfNeeded()
+        }
+    }
+
     /// 菜单选择麦克风后调用：更新本次/下次会话要用的麦克风（nil = 跟随系统默认）。
     /// 正在监听时原地重建重启引擎，让系统默认输入切到新选设备并立即生效；
     /// 引擎未开时只记录目标，下次 start 时由 recorder 临时切换默认输入。
@@ -325,6 +351,7 @@ final class DictationController: ObservableObject {
         lastError = nil
         commitRequested = false
         sendAfterCommit = false
+        resetCleanupBookkeeping()
         clearBuffer()
         generation += 1
         // 取消上一次可能仍在排队的启动重试，改用本次目标状态。
@@ -389,6 +416,9 @@ final class DictationController: ObservableObject {
             self.waveformPanel.setEmptyBufferBehavior(self.settings.emptyBufferBehavior)
             self.waveformPanel.setListening(true)
             self.waveformPanel.setWidth(CGFloat(self.settings.waveformWidth))
+            self.waveformPanel.setCleanupFused(self.cleanupReady)
+            self.waveformPanel.setTranscribing(false)
+            self.waveformPanel.setCleaning(false)
             self.waveformPanel.show()
             self.waveformPanel.setActive(isActive)
         }
@@ -408,6 +438,7 @@ final class DictationController: ObservableObject {
         recorder.stop()
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
+            // 不在这里收起 loading：由在途转写是否清空决定，收尾段转写期间继续显示。
             self.waveformPanel.setActive(false)
             self.waveformPanel.setListening(false)
         }
@@ -481,11 +512,14 @@ final class DictationController: ObservableObject {
         lastError = nil
         commitRequested = false
         sendAfterCommit = false
+        resetCleanupBookkeeping()
         clearBuffer()
         setState(.off)
         setStatus("空闲")
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
+            self.waveformPanel.setTranscribing(false)
+            self.waveformPanel.setCleaning(false)
             self.waveformPanel.setActive(false)
             self.waveformPanel.setListening(false)
             self.waveformPanel.hide()
@@ -517,11 +551,16 @@ final class DictationController: ObservableObject {
         segmentSamples.removeAll()
         segmentStart = nil
         vad.reset()
+        updateCutCountdown(nil)
+        resetCleanupBookkeeping()
         clearBuffer()
         setState(.active)
         setStatus("输入中…")
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
+            self.waveformPanel.setTranscribing(false)
+            self.waveformPanel.setCleaning(false)
+            self.waveformPanel.setCutCountdown(nil)
             self.waveformPanel.show()
             self.waveformPanel.setActive(true)
         }
@@ -535,13 +574,51 @@ final class DictationController: ObservableObject {
         guard !commitRequested else { return }
         CrashLog.write("[\(Date())] 请求提交：state=\(currentState)\n")
         commitRequested = true
+        // loading 不在这里单独触发：统一由「是否有在途转写」驱动（见 finalizeSegment /
+        // handleResult），因此 VAD 切片与收尾段都能在波形右侧显示转写进行中。
         flushFinalSegment()
         tryFinishCommit()
     }
 
-    /// 在途转写全部返回后执行提交（由 handleResult 在 pending 归零时调用）。
+    /// 主线程更新面板的「转写进行中」loading：只要还有在途转写就显示，全部返回即消失。
+    private func setTranscribing(_ transcribing: Bool, estimatedDuration: TimeInterval? = nil) {
+        DispatchQueue.main.async { [weak self] in
+            self?.waveformPanel.setTranscribing(transcribing, estimatedDuration: estimatedDuration)
+        }
+    }
+
+    /// 主线程更新面板的「清整理进行中」loading（第二阶段）。
+    private func setCleaning(_ cleaning: Bool, estimatedDuration: TimeInterval? = nil) {
+        DispatchQueue.main.async { [weak self] in
+            self?.waveformPanel.setCleaning(cleaning, estimatedDuration: estimatedDuration)
+        }
+    }
+
+    /// 由音频时长估算一段转写的预计耗时（秒）：固定开销 + 与音频长度成正比的部分。
+    /// 只用于 loading 进度条的缓动曲线，估不准也无妨（结果返回时统一拉到 100%）。
+    private static func estimatedTranscribeSeconds(audioSeconds: Double) -> TimeInterval {
+        let fixedOverhead: TimeInterval = 0.8
+        let perAudioSecond: TimeInterval = 0.10
+        return fixedOverhead + max(0, audioSeconds) * perAudioSecond
+    }
+
+    /// 由待整理文本长度估算清整理耗时（秒）：固定开销 + 与字数成正比的部分。
+    private static func estimatedCleanSeconds(characters: Int) -> TimeInterval {
+        let fixedOverhead: TimeInterval = 1.2
+        let perCharacter: TimeInterval = 0.03
+        return fixedOverhead + Double(max(0, characters)) * perCharacter
+    }
+
+    /// 在途转写全部返回、且待整理文本都已清整理后执行提交（由 handleResult /
+    /// handleCleanupResult 在条件满足时调用）。
     private func tryFinishCommit() {
         guard commitRequested, pending == 0 else { return }
+        if cleanupPending {
+            scheduleCleanupIfNeeded()
+            if cleanupInFlight { return }
+            // 未配置或请求已结束仍有残留：放弃等待，直接按原文提交。
+            markAllBlocksCleaned()
+        }
         finishCommit()
     }
 
@@ -550,6 +627,9 @@ final class DictationController: ObservableObject {
         segmentSamples.removeAll()
         segmentStart = nil
         vad.reset()
+        resetCleanupBookkeeping()
+        // 取出并清空缓冲：整段文本先贴到当前光标，随后光波下方的文本区清空，
+        // 避免提交后旧内容一直留在面板上。
         let text = takeBufferText()
         let shouldSend = sendAfterCommit
         sendAfterCommit = false
@@ -557,6 +637,9 @@ final class DictationController: ObservableObject {
         setStatus("待命（按 \(hotkeyLabel) 重新激活）")
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
+            // 顺序：先收起 loading（波形复位），再切非激活灰，最后把文本贴进当前输入框。
+            self.waveformPanel.setTranscribing(false)
+            self.waveformPanel.setCleaning(false)
             self.waveformPanel.setActive(false)
             if !text.isEmpty {
                 self.enqueuePaste(text)
@@ -668,11 +751,14 @@ final class DictationController: ObservableObject {
         lastError = nil
         commitRequested = false
         sendAfterCommit = false
+        resetCleanupBookkeeping()
         clearBuffer()
         setState(.off)
         setStatus("麦克风不可用，语音输入已停止（可稍后重新开始）")
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
+            self.waveformPanel.setTranscribing(false)
+            self.waveformPanel.setCleaning(false)
             self.waveformPanel.setActive(false)
             self.waveformPanel.setListening(false)
             self.waveformPanel.hide()
@@ -694,6 +780,15 @@ final class DictationController: ObservableObject {
         }
 
         let now = Date()
+        // 临近最大切段（倒计时剩 5 秒）时显示倒计时数字，提示即将强制切时间片。
+        if let start = segmentStart {
+            let remaining = settings.maxSegmentSeconds - now.timeIntervalSince(start)
+            if settings.maxSegmentSeconds > Self.cutWarningSeconds, remaining <= Self.cutWarningSeconds {
+                updateCutCountdown(max(1, Int(ceil(remaining))))
+            } else {
+                updateCutCountdown(nil)
+            }
+        }
         let rms = Self.rms(samples: samples)
         if vad.feed(rms: rms, at: now.timeIntervalSinceReferenceDate, silenceSeconds: settings.pauseSilenceSeconds) {
             finalizeSegment(force: false)
@@ -701,6 +796,15 @@ final class DictationController: ObservableObject {
         }
         if let start = segmentStart, now.timeIntervalSince(start) >= settings.maxSegmentSeconds {
             finalizeSegment(force: false)
+        }
+    }
+
+    /// 更新「临近最大切段」倒计时秒数（engineQueue 上调用，仅在变化时推主线程）。
+    private func updateCutCountdown(_ seconds: Int?) {
+        guard cutCountdown != seconds else { return }
+        cutCountdown = seconds
+        DispatchQueue.main.async { [weak self] in
+            self?.waveformPanel.setCutCountdown(seconds)
         }
     }
 
@@ -737,6 +841,7 @@ final class DictationController: ObservableObject {
         segmentSamples.removeAll()
         segmentStart = nil
         vad.reset()
+        updateCutCountdown(nil)
 
         guard !samples.isEmpty else { return }
         let minCount = Int(recorder.sampleRate * Self.minSegmentSeconds)
@@ -748,6 +853,10 @@ final class DictationController: ObservableObject {
         let wav = WAVWriter.pcm16Data(samples: samples, sampleRate: Int(recorder.sampleRate))
         let gen = generation
         pending += 1
+        // 有在途转写：波形区铺满转译进度条，直到结果返回。进度条按本段音频时长伸缩，
+        // VAD 切片同样触发，借此可观察切片时机与该段转写耗时。
+        let audioSeconds = recorder.sampleRate > 0 ? Double(samples.count) / recorder.sampleRate : 0
+        setTranscribing(true, estimatedDuration: Self.estimatedTranscribeSeconds(audioSeconds: audioSeconds))
         transcriber.transcribe(wavData: wav, urlString: settings.sttURLString) { [weak self] result in
             guard let self else { return }
             self.engineQueue.async {
@@ -796,6 +905,10 @@ final class DictationController: ObservableObject {
             return
         }
         pending -= 1
+        // 所有在途转写都返回后才收起右侧 loading：loading 时长即该段转写耗时。
+        if pending == 0 {
+            setTranscribing(false)
+        }
         switch result {
         case .success(let text):
             let cleaned = cleanedTranscribedText(text)
@@ -841,30 +954,217 @@ final class DictationController: ObservableObject {
     // MARK: - 缓冲
 
     /// 追加一段转写文本到面板缓冲（同段落内的换行保留，首尾空行裁掉）。
+    /// 未启用/未配置清整理时直接标记为已整理，避免积压待整理文本。
     private func appendBuffer(_ text: String) {
         let line = text.trimmingCharacters(in: .newlines)
         guard !line.isEmpty else { return }
-        bufferLines.append(line)
+        bufferBlocks.append(BufferBlock(id: UUID(), text: line, isCleaned: !cleanupReady))
         updateBufferUI()
+        scheduleCleanupIfNeeded()
     }
 
     /// 取出并清空缓冲文本：各段以换行拼接后整段粘贴，保持逐句成行。
     private func takeBufferText() -> String {
-        let text = bufferLines.joined(separator: "\n")
+        let text = bufferBlocks.map(\.text).filter { !$0.isEmpty }.joined(separator: "\n")
         clearBuffer()
         return text
     }
 
     private func clearBuffer() {
-        bufferLines.removeAll()
+        bufferBlocks.removeAll()
+        // 缓冲已清空：作废在途清整理，避免过期结果落回新缓冲。
+        resetCleanupBookkeeping()
         updateBufferUI()
     }
 
     private func updateBufferUI() {
-        let lines = bufferLines
+        let lines = bufferBlocks.map(\.text)
         DispatchQueue.main.async { [weak self] in
             self?.waveformPanel.setBuffer(lines)
         }
+    }
+
+    // MARK: - 清整理（大模型）
+
+    /// 清整理是否已启用且配置完整（有 Key）。
+    private var cleanupReady: Bool {
+        settings.cleanupEnabled && !settings.cleanupAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    /// 是否还有未整理的缓冲文本。
+    private var hasUncleanedBlocks: Bool {
+        bufferBlocks.contains { !$0.isCleaned }
+    }
+
+    /// 是否仍在等待清整理落地（提交/停止时需等待，保证粘贴出去的是整理后的文本）。
+    private var cleanupPending: Bool {
+        cleanupReady && (cleanupInFlight || hasUncleanedBlocks)
+    }
+
+    private func cleanupConfiguration() -> DictationCleaner.Configuration {
+        DictationCleaner.Configuration(
+            urlString: settings.cleanupURLString,
+            apiKey: settings.cleanupAPIKey,
+            model: settings.cleanupModel
+        )
+    }
+
+    /// 待整理文本之外，额外带给大模型的「上文」字符上限（注意是字符，不是 token）。
+    /// 只取已整理前文的最后 500 个字，足以理解被切断处的语境，又不会让成本随会话变长而膨胀。
+    private static let cleanupContextCharacterLimit = 500
+
+    /// 带上下文地整理尚未处理的 block：把已整理的前文（截取最后 500 字）作为【上文】
+    /// 一并送出，让被切断的新段能借助语境纠正；返回后只替换这批未整理的 block，前文不动。
+    /// 请求在途时新到的段落留到下一轮一起带上。
+    private func scheduleCleanupIfNeeded() {
+        guard cleanupReady, !cleanupInFlight else { return }
+        let dirty = bufferBlocks.filter { !$0.isCleaned }
+        guard !dirty.isEmpty else { return }
+
+        let context = Self.cleanupContext(
+            from: bufferBlocks.filter { $0.isCleaned }.map(\.text)
+        )
+        let ids = dirty.map(\.id)
+        let joined = dirty.map(\.text).joined(separator: "\n")
+        cleanupToken += 1
+        let token = cleanupToken
+        cleanupInFlight = true
+        setCleaning(true, estimatedDuration: Self.estimatedCleanSeconds(characters: joined.count + context.count))
+        let gen = generation
+        cleaner.clean(text: joined, context: context, configuration: cleanupConfiguration()) { [weak self] result in
+            guard let self else { return }
+            self.engineQueue.async {
+                self.handleCleanupResult(result, originalText: joined, ids: ids, generation: gen, token: token)
+            }
+        }
+    }
+
+    /// 取已整理前文的最后若干**字符**作为上文（按字符计数，非 token）。
+    private static func cleanupContext(from cleanedTexts: [String]) -> String {
+        guard !cleanedTexts.isEmpty else { return "" }
+        let joined = cleanedTexts.joined(separator: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !joined.isEmpty else { return "" }
+        if joined.count <= cleanupContextCharacterLimit { return joined }
+        return String(joined.suffix(cleanupContextCharacterLimit))
+    }
+
+    /// 清整理返回：成功后用整理文本替换被送整理的那批 block，失败则保留原文并标记，
+    /// 避免同一段文本反复重试；随后补跑在途期间新到的未整理 block，并推进提交流程。
+    private func handleCleanupResult(
+        _ result: Result<String, Error>,
+        originalText: String,
+        ids: [UUID],
+        generation gen: Int,
+        token: Int
+    ) {
+        if token == cleanupToken {
+            cleanupInFlight = false
+        }
+        setCleaning(false)
+        guard gen == generation else {
+            CrashLog.write("[\(Date())] 丢弃过期清整理结果（gen \(gen) != \(generation)）\n")
+            return
+        }
+        switch result {
+        case .success(let cleaned):
+            let value = cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
+            if value.isEmpty || Self.looksLikeNonRewrite(original: originalText, cleaned: value) {
+                // 模型没在整理（例如把「修改」当成指令反问用户），保留原始转写，绝不把
+                // 这类内容替换进缓冲。
+                if !value.isEmpty {
+                    CrashLog.write("[\(Date())] 清整理疑似非改写，保留原文：「\(value)」\n")
+                }
+                markBlocksCleaned(ids)
+            } else {
+                replaceBlocks(ids, with: value)
+            }
+        case .failure(let error):
+            CrashLog.write("[\(Date())] 清整理失败：\(error.localizedDescription)\n")
+            setStatus("清整理失败，已保留原文：\(error.localizedDescription)")
+            markBlocksCleaned(ids)
+        }
+        updateBufferUI()
+        scheduleCleanupIfNeeded()
+        tryFinishCommit()
+        finishIfNeeded()
+    }
+
+    /// 判断模型返回的是否明显不是「校对改写」。清整理只会做等长左右的替换，若输入是
+    /// 很短的词/口令（如「修改」「翻译」）而输出明显变长，通常是模型把它当指令来回答，
+    /// 此时应保留原始转写。
+    private static func looksLikeNonRewrite(original: String, cleaned: String) -> Bool {
+        let inputCount = original.count
+        let outputCount = cleaned.count
+        guard inputCount > 0 else { return false }
+        if inputCount <= 4 && outputCount > inputCount + 2 { return true }
+        let metaMarkers = ["请提供", "请发送", "需要校对", "未提供", "没有提供", "请把需要"]
+        if inputCount <= 12, outputCount > inputCount + 4, metaMarkers.contains(where: { cleaned.contains($0) }) {
+            return true
+        }
+        return false
+    }
+
+    /// 用整理后的文本替换被送整理的那批 block（合并为一个已整理 block）。
+    /// 断句续写优化：这批新段紧跟在已整理前文之后，且前文没有句末标点时，说明上一句
+    /// 被 ASR 切断了——把整理结果直接续写到前文末尾（不换行），避免句子中间多出换行。
+    private func replaceBlocks(_ ids: [UUID], with text: String) {
+        let idSet = Set(ids)
+        guard let insertAt = bufferBlocks.firstIndex(where: { idSet.contains($0.id) }) else { return }
+
+        if insertAt > 0,
+           !text.contains("\n"),
+           !Self.startsWithListMarker(text),
+           bufferBlocks[insertAt - 1].isCleaned,
+           !Self.hasTerminalPunctuation(bufferBlocks[insertAt - 1].text) {
+            bufferBlocks[insertAt - 1].text += text
+            bufferBlocks.removeAll { idSet.contains($0.id) }
+            return
+        }
+
+        bufferBlocks.removeAll { idSet.contains($0.id) }
+        let index = min(insertAt, bufferBlocks.count)
+        bufferBlocks.insert(BufferBlock(id: UUID(), text: text, isCleaned: true), at: index)
+    }
+
+    /// 文本是否以句末/分句标点结尾（用于判断上一句是否已经说完）。
+    private static func hasTerminalPunctuation(_ text: String) -> Bool {
+        guard let last = text.last else { return false }
+        return "。！？!?；;：:…".contains(last)
+    }
+
+    /// 整理结果是否以列表标记开头（如「1.」「1、」「- 」「•」）；是则不并入上一段。
+    private static func startsWithListMarker(_ text: String) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let first = trimmed.first else { return false }
+        if first == "-" || first == "*" || first == "•" || first == "·" { return true }
+        var index = trimmed.startIndex
+        var digits = 0
+        while index < trimmed.endIndex, trimmed[index].isNumber {
+            digits += 1
+            index = trimmed.index(after: index)
+        }
+        guard digits > 0, index < trimmed.endIndex else { return false }
+        return [".", "、", ")", "）", "．"].contains(trimmed[index])
+    }
+
+    private func markBlocksCleaned(_ ids: [UUID]) {
+        let idSet = Set(ids)
+        for index in bufferBlocks.indices where idSet.contains(bufferBlocks[index].id) {
+            bufferBlocks[index].isCleaned = true
+        }
+    }
+
+    private func markAllBlocksCleaned() {
+        for index in bufferBlocks.indices {
+            bufferBlocks[index].isCleaned = true
+        }
+    }
+
+    /// 作废在途清整理请求（停麦/提交/清空缓冲时调用），避免过期回调改动新会话缓冲。
+    private func resetCleanupBookkeeping() {
+        cleanupToken += 1
+        cleanupInFlight = false
     }
 
     /// 语音指令识别：整段转写文本去掉首尾空白、标点并忽略大小写后，恰好等于某个指令词。
@@ -923,7 +1223,7 @@ final class DictationController: ObservableObject {
 
     /// 识别到「清空/clear」指令：清空 debuff 缓冲区里尚未提交的文本，继续输入。
     private func performClearCommand() {
-        CrashLog.write("[\(Date())] 指令：清空 → 清空缓冲区 lines=\(bufferLines.count) state=\(currentState)\n")
+        CrashLog.write("[\(Date())] 指令：清空 → 清空缓冲区 blocks=\(bufferBlocks.count) state=\(currentState)\n")
         clearBuffer()
     }
 
@@ -965,9 +1265,16 @@ final class DictationController: ObservableObject {
 
     private func finishIfNeeded() {
         guard isFlushing, pending == 0 else { return }
+        if cleanupPending {
+            scheduleCleanupIfNeeded()
+            if cleanupInFlight { return }
+            // 未配置或请求已结束仍有残留：放弃等待，直接按原文落盘。
+            markAllBlocksCleaned()
+        }
         // 停止引擎时，把缓冲里还没提交的内容整段落盘，避免没按键就停麦导致白说。
         let text = takeBufferText()
         isFlushing = false
+        resetCleanupBookkeeping()
         setState(.off)
         if let lastError {
             setStatus("完成（部分失败：\(lastError)）")
@@ -977,6 +1284,8 @@ final class DictationController: ObservableObject {
         self.lastError = nil
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
+            self.waveformPanel.setTranscribing(false)
+            self.waveformPanel.setCleaning(false)
             if !text.isEmpty {
                 self.enqueuePaste(text)
             }
@@ -1024,11 +1333,19 @@ final class DictationController: ObservableObject {
         }
     }
 
+    func checkCleanupConnection(completion: @escaping (Bool, String) -> Void) {
+        cleaner.checkHealth(configuration: cleanupConfiguration(), completion: completion)
+    }
+
     // MARK: - 发布到主线程
 
     private func setState(_ newState: State) {
         guard currentState != newState else { return }
         currentState = newState
+        // 离开激活态即撤销切段预警，避免残留的灰点提示。
+        if newState != .active {
+            updateCutCountdown(nil)
+        }
         let value = newState
         DispatchQueue.main.async { [weak self] in
             self?.state = value

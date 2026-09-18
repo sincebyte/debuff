@@ -35,6 +35,8 @@ final class DebuffStatusBarController: NSObject, NSMenuDelegate {
     private var itemJournalTodayText: NSMenuItem!
     private var itemJournalSavedTime: NSMenuItem!
     private var itemDictationURL: NSMenuItem!
+    private var itemCleanupEnabled: NSMenuItem!
+    private var itemCleanupModel: NSMenuItem!
     private var itemDictationHotkey: NSMenuItem!
     private var itemMicParent: NSMenuItem!
     private var micMenu: NSMenu!
@@ -282,6 +284,19 @@ final class DebuffStatusBarController: NSObject, NSMenuDelegate {
         settingsMenu.addItem(NSMenuItem(title: "输入地址…", action: #selector(editSTTURL), keyEquivalent: "").apply { $0.target = self })
         settingsMenu.addItem(NSMenuItem(title: "恢复默认", action: #selector(resetSTTURL), keyEquivalent: "").apply { $0.target = self })
 
+        settingsMenu.addItem(subHeader("文本清整理（大模型）"))
+        itemCleanupEnabled = NSMenuItem(title: "启用清整理（错别字/重复词）", action: #selector(toggleCleanup), keyEquivalent: "")
+        itemCleanupEnabled.target = self
+        itemCleanupEnabled.setOn(s.cleanupEnabled, checkmark: true)
+        itemCleanupEnabled.toolTip = "开启后，每次 ASR 转写出的文字会拉通尚未整理的部分交给大模型做「清整理」：纠正错别字/同音字、删除重复词与口水词、补全标点。整理完成后才允许提交粘贴，确保上屏的是整理后的文本。"
+        settingsMenu.addItem(itemCleanupEnabled)
+        itemCleanupModel = makeDisabled("模型：\(s.cleanupModel)")
+        settingsMenu.addItem(itemCleanupModel)
+        settingsMenu.addItem(NSMenuItem(title: "输入接口地址…", action: #selector(editCleanupURL), keyEquivalent: "").apply { $0.target = self })
+        settingsMenu.addItem(NSMenuItem(title: "输入模型名…", action: #selector(editCleanupModel), keyEquivalent: "").apply { $0.target = self })
+        settingsMenu.addItem(NSMenuItem(title: "设置 API Key…", action: #selector(editCleanupKey), keyEquivalent: "").apply { $0.target = self })
+        settingsMenu.addItem(NSMenuItem(title: "恢复默认", action: #selector(resetCleanup), keyEquivalent: "").apply { $0.target = self })
+
         settingsMenu.addItem(subHeader("快捷键"))
         itemDictationHotkey = makeDisabled(DictationHotKey.label(keyCode: s.hotkeyKeyCode, flags: s.hotkeyFlags))
         settingsMenu.addItem(itemDictationHotkey)
@@ -307,6 +322,7 @@ final class DebuffStatusBarController: NSObject, NSMenuDelegate {
         rebuildMicMenu()
 
         rootMenu.addItem(NSMenuItem(title: "测试服务连接", action: #selector(testDictationConnection), keyEquivalent: "").apply { $0.target = self })
+        rootMenu.addItem(NSMenuItem(title: "测试清整理连接", action: #selector(testCleanupConnection), keyEquivalent: "").apply { $0.target = self })
         rootMenu.addItem(NSMenuItem(title: "辅助功能设置…", action: #selector(openAccessibilitySettings), keyEquivalent: "").apply { $0.target = self })
     }
 
@@ -592,6 +608,96 @@ final class DebuffStatusBarController: NSObject, NSMenuDelegate {
         refreshDictationItems()
     }
 
+    @objc private func toggleCleanup() {
+        let s = services.dictation.settings
+        s.cleanupEnabled.toggle()
+        services.dictation.applyCleanupSettings()
+        refreshDictationItems()
+    }
+
+    @objc private func editCleanupURL() {
+        promptText(
+            title: "输入清整理接口地址",
+            message: "OpenAI 兼容的 Chat Completions 完整 URL，例如：\(DictationSettings.defaultCleanupURL)",
+            current: services.dictation.settings.cleanupURLString
+        ) { [weak self] value in
+            guard let self, !value.isEmpty else { return }
+            self.services.dictation.settings.cleanupURLString = value
+            self.services.dictation.applyCleanupSettings()
+            self.refreshDictationItems()
+        }
+    }
+
+    @objc private func editCleanupModel() {
+        promptText(
+            title: "输入清整理模型名",
+            message: "例如：\(DictationSettings.defaultCleanupModel)",
+            current: services.dictation.settings.cleanupModel
+        ) { [weak self] value in
+            guard let self, !value.isEmpty else { return }
+            self.services.dictation.settings.cleanupModel = value
+            self.services.dictation.applyCleanupSettings()
+            self.refreshDictationItems()
+        }
+    }
+
+    @objc private func editCleanupKey() {
+        promptText(
+            title: "设置清整理 API Key",
+            message: "用于调用大模型接口的 Bearer Token，仅保存在本机 UserDefaults，不写入仓库。",
+            current: services.dictation.settings.cleanupAPIKey,
+            isSecure: true
+        ) { [weak self] value in
+            guard let self else { return }
+            self.services.dictation.settings.cleanupAPIKey = value
+            self.services.dictation.applyCleanupSettings()
+            self.refreshDictationItems()
+        }
+    }
+
+    @objc private func resetCleanup() {
+        let s = services.dictation.settings
+        s.cleanupURLString = DictationSettings.defaultCleanupURL
+        s.cleanupModel = DictationSettings.defaultCleanupModel
+        s.cleanupAPIKey = DictationSettings.defaultCleanupAPIKey
+        services.dictation.applyCleanupSettings()
+        refreshDictationItems()
+    }
+
+    @objc private func testCleanupConnection() {
+        NSApp.activate(ignoringOtherApps: true)
+        services.dictation.checkCleanupConnection { ok, message in
+            let alert = NSAlert()
+            alert.messageText = ok ? "连接正常" : "连接失败"
+            alert.informativeText = message
+            alert.addButton(withTitle: "好")
+            alert.runModal()
+        }
+    }
+
+    private func promptText(
+        title: String,
+        message: String,
+        current: String,
+        isSecure: Bool = false,
+        apply: @escaping (String) -> Void
+    ) {
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = message
+        let field: NSTextField = isSecure
+            ? NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 420, height: 24))
+            : NSTextField(frame: NSRect(x: 0, y: 0, width: 420, height: 24))
+        field.stringValue = current
+        alert.accessoryView = field
+        alert.addButton(withTitle: "确定")
+        alert.addButton(withTitle: "取消")
+        if alert.runModal() == .alertFirstButtonReturn {
+            apply(field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+    }
+
     @objc private func testDictationConnection() {
         NSApp.activate(ignoringOtherApps: true)
         services.dictation.checkConnection { ok, message in
@@ -695,6 +801,8 @@ final class DebuffStatusBarController: NSObject, NSMenuDelegate {
         itemJournalTodayText.title = journalTodayLine
         itemJournalSavedTime.title = journalSavedLine
         itemDictationURL.title = s.sttURLString
+        itemCleanupEnabled.setOn(s.cleanupEnabled, checkmark: true)
+        itemCleanupModel.title = "模型：\(s.cleanupModel)"
         itemDictationHotkey.title = DictationHotKey.label(keyCode: s.hotkeyKeyCode, flags: s.hotkeyFlags)
         itemMicParent.title = microphoneTitle
         for it in pauseOptionItems {

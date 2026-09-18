@@ -60,11 +60,38 @@ final class DictationSettings: ObservableObject {
         didSet { UserDefaults.standard.set(emptyBufferBehavior.rawValue, forKey: Self.emptyBufferBehaviorKey) }
     }
 
+    /// 转写后的「清整理」：把转写文本交给大模型纠正错别字、去重复词。默认开启。
+    @Published var cleanupEnabled: Bool {
+        didSet { UserDefaults.standard.set(cleanupEnabled, forKey: Self.cleanupEnabledKey) }
+    }
+
+    /// 清整理接口地址（OpenAI 兼容的 Chat Completions 完整 URL）。
+    @Published var cleanupURLString: String {
+        didSet { UserDefaults.standard.set(cleanupURLString, forKey: Self.cleanupURLKey) }
+    }
+
+    /// 清整理接口的 API Key（Bearer Token）。
+    @Published var cleanupAPIKey: String {
+        didSet { UserDefaults.standard.set(cleanupAPIKey, forKey: Self.cleanupAPIKeyKey) }
+    }
+
+    /// 清整理使用的模型名。
+    @Published var cleanupModel: String {
+        didSet { UserDefaults.standard.set(cleanupModel, forKey: Self.cleanupModelKey) }
+    }
+
     static let defaultURL = "http://127.0.0.1:8001/v1/audio/transcriptions"
+    static let defaultCleanupURL = "https://api.deepseek.com/chat/completions"
+    static let defaultCleanupModel = "deepseek-v4-flash"
+    /// 默认 Key 优先取环境变量，避免把密钥硬编码进仓库；未设置时留空，可在菜单里填写。
+    static var defaultCleanupAPIKey: String {
+        let env = ProcessInfo.processInfo.environment
+        return env["DEEPSEEK_API_KEY"] ?? env["ZHONGYING_API_KEY"] ?? ""
+    }
     static let defaultKeyCode: UInt32 = 2 // kVK_ANSI_D
     static let defaultFlags: UInt32 = UInt32(optionKey) // ⌥D
     static let pausePresets: [Double] = [0.4, 0.6, 0.8, 1.0, 1.5, 2.0, 3.0, 4.0, 5.0]
-    static let maxSegmentPresets: [Double] = [5, 10, 15, 20, 30]
+    static let maxSegmentPresets: [Double] = [5, 10, 15, 20, 30, 45, 60]
     static let activeOpacityPresets: [Double] = [0.5, 0.65, 0.8, 1.0]
     static let waveformWidthPresets: [Double] = [35, 60, 100, 167, 240, 320]
 
@@ -74,11 +101,16 @@ final class DictationSettings: ObservableObject {
     private static let hotkeyMigratedKey = "dictation.hotkeyMigrated"
     private static let pauseSilenceKey = "dictation.pauseSilence"
     private static let maxSegmentKey = "dictation.maxSegment"
+    private static let maxSegmentExtendedKey = "dictation.maxSegmentExtended60"
     private static let activeOpacityKey = "dictation.activeOpacity"
     private static let waveformWidthKey = "dictation.waveform.width"
     private static let microphoneKey = "dictation.microphone.uid"
     private static let journalEnabledKey = "dictation.journal.enabled"
     private static let emptyBufferBehaviorKey = "dictation.emptyBufferBehavior"
+    private static let cleanupEnabledKey = "dictation.cleanup.enabled"
+    private static let cleanupURLKey = "dictation.cleanup.url"
+    private static let cleanupAPIKeyKey = "dictation.cleanup.apiKey"
+    private static let cleanupModelKey = "dictation.cleanup.model"
 
     init() {
         let def = UserDefaults.standard
@@ -86,14 +118,30 @@ final class DictationSettings: ObservableObject {
         hotkeyKeyCode = (def.object(forKey: Self.hotkeyKeyCodeKey) as? NSNumber)?.uint32Value ?? Self.defaultKeyCode
         hotkeyFlags = (def.object(forKey: Self.hotkeyFlagsKey) as? NSNumber)?.uint32Value ?? Self.defaultFlags
         pauseSilenceSeconds = def.object(forKey: Self.pauseSilenceKey) as? Double ?? 1.0
-        maxSegmentSeconds = def.object(forKey: Self.maxSegmentKey) as? Double ?? 10.0
+        maxSegmentSeconds = def.object(forKey: Self.maxSegmentKey) as? Double ?? 60.0
         activeOpacity = def.object(forKey: Self.activeOpacityKey) as? Double ?? 1.0
         waveformWidth = def.object(forKey: Self.waveformWidthKey) as? Double ?? 167.0
         microphoneUID = def.string(forKey: Self.microphoneKey)
         journalEnabled = def.object(forKey: Self.journalEnabledKey) as? Bool ?? true
         emptyBufferBehavior = def.string(forKey: Self.emptyBufferBehaviorKey)
             .flatMap(EmptyBufferBehavior.init(rawValue:)) ?? .inactive
+        cleanupEnabled = def.object(forKey: Self.cleanupEnabledKey) as? Bool ?? true
+        cleanupURLString = def.string(forKey: Self.cleanupURLKey) ?? Self.defaultCleanupURL
+        cleanupAPIKey = def.string(forKey: Self.cleanupAPIKeyKey) ?? Self.defaultCleanupAPIKey
+        cleanupModel = def.string(forKey: Self.cleanupModelKey) ?? Self.defaultCleanupModel
         migrateHotkeyIfNeeded()
+        migrateMaxSegmentIfNeeded()
+    }
+
+    /// 最大切段上限从 30s 延长到 60s：一次性把旧设置提升到 60，
+    /// 避免升级后仍被旧的较短上限提前截断。
+    private func migrateMaxSegmentIfNeeded() {
+        let def = UserDefaults.standard
+        guard !def.bool(forKey: Self.maxSegmentExtendedKey) else { return }
+        def.set(true, forKey: Self.maxSegmentExtendedKey)
+        if maxSegmentSeconds < 60 {
+            maxSegmentSeconds = 60
+        }
     }
 
     /// 快捷键默认随版本演进：v1 ⌥⇧F2 → v2 ⌥⌘D → v3 ⌥D。存版本号，版本不一致时应用当前默认。
