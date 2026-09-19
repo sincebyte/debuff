@@ -27,10 +27,20 @@ rm -rf "$APP_PATH"
 mkdir -p "$APP_PATH/Contents/MacOS"
 cp "$BINARY_SRC" "$APP_PATH/Contents/MacOS/SedentaryDebuff"
 chmod +x "$APP_PATH/Contents/MacOS/SedentaryDebuff"
-cp -R "$BUNDLE_SRC" "$APP_PATH/Contents/MacOS/"
-# SPM 资源包默认无 Info.plist，codesign 会拒绝；补全为合法 BNDL 后先签内层再签 .app
-cp "$ROOT/App/ResourceBundle-Info.plist" \
-	"$APP_PATH/Contents/MacOS/SedentaryDebuff_SedentaryDebuff.bundle/Info.plist"
+# 资源 bundle 必须放进 Contents/Resources：SwiftPM 生成的 Bundle.module
+# 依次在 Bundle.main.resourceURL（即 Contents/Resources）等位置查找，
+# 放到 Contents/MacOS 会找不到并以 "unable to find bundle" 崩溃。
+mkdir -p "$APP_PATH/Contents/Resources"
+INNER_BUNDLE="$APP_PATH/Contents/Resources/SedentaryDebuff_SedentaryDebuff.bundle"
+cp -R "$BUNDLE_SRC" "$APP_PATH/Contents/Resources/"
+# SPM 资源包已在 Contents/Info.plist 生成合法 BNDL（缺失时才补全）。
+# 切勿在 bundle 根额外放文件，否则 codesign 会以
+# "unsealed contents present in the bundle root" 失败。
+BUNDLE_PLIST="$INNER_BUNDLE/Contents/Info.plist"
+if [[ ! -f "$BUNDLE_PLIST" ]]; then
+	mkdir -p "$(dirname "$BUNDLE_PLIST")"
+	cp "$ROOT/App/ResourceBundle-Info.plist" "$BUNDLE_PLIST"
+fi
 
 cp "$ROOT/App/Info.plist" "$APP_PATH/Contents/Info.plist"
 
@@ -66,8 +76,7 @@ fi
 
 echo "==> ad-hoc codesign"
 if command -v codesign >/dev/null 2>&1; then
-	INNER="$APP_PATH/Contents/MacOS/SedentaryDebuff_SedentaryDebuff.bundle"
-	codesign --force --sign - "$INNER"
+	codesign --force --sign - "$INNER_BUNDLE"
 	codesign --force --deep --sign - "$APP_PATH"
 else
 	echo "warning: codesign not found; skip signing"
