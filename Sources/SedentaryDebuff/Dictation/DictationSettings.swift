@@ -65,6 +65,11 @@ final class DictationSettings: ObservableObject {
         didSet { UserDefaults.standard.set(cleanupEnabled, forKey: Self.cleanupEnabledKey) }
     }
 
+    /// 激活语音输入时静音系统声音（默认开启）；离开激活时恢复激活前的静音状态。
+    @Published var muteSystemAudioWhenActive: Bool {
+        didSet { UserDefaults.standard.set(muteSystemAudioWhenActive, forKey: Self.muteSystemAudioKey) }
+    }
+
     /// 清整理接口地址（OpenAI 兼容的 Chat Completions 完整 URL）。
     @Published var cleanupURLString: String {
         didSet { UserDefaults.standard.set(cleanupURLString, forKey: Self.cleanupURLKey) }
@@ -111,6 +116,7 @@ final class DictationSettings: ObservableObject {
     private static let cleanupURLKey = "dictation.cleanup.url"
     private static let cleanupAPIKeyKey = "dictation.cleanup.apiKey"
     private static let cleanupModelKey = "dictation.cleanup.model"
+    private static let muteSystemAudioKey = "dictation.muteSystemAudioWhenActive"
 
     init() {
         let def = UserDefaults.standard
@@ -129,6 +135,7 @@ final class DictationSettings: ObservableObject {
         cleanupURLString = def.string(forKey: Self.cleanupURLKey) ?? Self.defaultCleanupURL
         cleanupAPIKey = def.string(forKey: Self.cleanupAPIKeyKey) ?? Self.defaultCleanupAPIKey
         cleanupModel = def.string(forKey: Self.cleanupModelKey) ?? Self.defaultCleanupModel
+        muteSystemAudioWhenActive = def.object(forKey: Self.muteSystemAudioKey) as? Bool ?? true
         migrateHotkeyIfNeeded()
         migrateMaxSegmentIfNeeded()
     }

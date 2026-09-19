@@ -54,6 +54,8 @@ final class DictationController: ObservableObject {
     /// 锁屏时若在监听，记录解锁后要恢复的模式。
     private var shouldRestoreAfterUnlock = false
     private var restoreModeOnUnlock: State = .inactive
+    /// 是否已由本控制器把系统静音（离开激活时据此解除静音）。
+    private var didMuteSystemAudio = false
 
     private var pasteQueue: [String] = []
     private var pasteBusy = false
@@ -139,6 +141,7 @@ final class DictationController: ObservableObject {
             object: nil,
             queue: nil
         ) { [weak self] _ in
+            self?.restoreSystemMute()
             self?.recorder.stop()
         }
         applyHotkey()
@@ -573,6 +576,8 @@ final class DictationController: ObservableObject {
         guard currentState == .active || currentState == .inactive else { return }
         guard !commitRequested else { return }
         CrashLog.write("[\(Date())] 请求提交：state=\(currentState)\n")
+        // 用户已请求离开激活：立即放开系统静音，不必等在途转写/清整理全部落地。
+        releaseSystemMute()
         commitRequested = true
         // loading 不在这里单独触发：统一由「是否有在途转写」驱动（见 finalizeSegment /
         // handleResult），因此 VAD 切片与收尾段都能在波形右侧显示转写进行中。
@@ -925,6 +930,8 @@ final class DictationController: ObservableObject {
     }
 
     /// 按当前状态决定一段转写文本的去向：激活期间只累积到缓冲，提交时才整段上屏。
+    /// 日记不再在这里写：改为在「清整理完成后」写入整理后的文本（见 appendBuffer /
+    /// handleCleanupResult），保证语音日记记录的是大模型整理后的内容。
     private func handleTranscribed(_ text: String) {
         switch currentState {
         case .active, .inactive:
@@ -933,18 +940,15 @@ final class DictationController: ObservableObject {
                 // 提交流程会把缓冲内容整体粘贴后统一回车。
                 if let body = match.body {
                     appendBuffer(body)
-                    journal.append(activeText: body)
                 }
                 perform(match.command)
             } else {
                 appendBuffer(text)
-                journal.append(activeText: text)
             }
         case .flushing:
             // 从激活停止时收尾的文本仍要落盘；从非激活停止时丢弃待命期间的转写。
             if !discardPendingOnStop {
                 appendBuffer(text)
-                journal.append(activeText: text)
             }
         case .off:
             break
@@ -954,11 +958,16 @@ final class DictationController: ObservableObject {
     // MARK: - 缓冲
 
     /// 追加一段转写文本到面板缓冲（同段落内的换行保留，首尾空行裁掉）。
-    /// 未启用/未配置清整理时直接标记为已整理，避免积压待整理文本。
+    /// 未启用/未配置清整理时直接标记为已整理并立即写入日记（原文）；否则记为待整理，
+    /// 等清整理返回后在 handleCleanupResult 里按整理后的文本写日记。
     private func appendBuffer(_ text: String) {
         let line = text.trimmingCharacters(in: .newlines)
         guard !line.isEmpty else { return }
-        bufferBlocks.append(BufferBlock(id: UUID(), text: line, isCleaned: !cleanupReady))
+        let alreadyCleaned = !cleanupReady
+        bufferBlocks.append(BufferBlock(id: UUID(), text: line, isCleaned: alreadyCleaned))
+        if alreadyCleaned {
+            journal.append(activeText: line)
+        }
         updateBufferUI()
         scheduleCleanupIfNeeded()
     }
@@ -1051,6 +1060,8 @@ final class DictationController: ObservableObject {
 
     /// 清整理返回：成功后用整理文本替换被送整理的那批 block，失败则保留原文并标记，
     /// 避免同一段文本反复重试；随后补跑在途期间新到的未整理 block，并推进提交流程。
+    /// 语音日记在这里写入——记录的是最终落进缓冲的那份文本（整理后，或保留的原文）；
+    /// 若这批 block 在返回前已被清空/丢弃，则不再写日记。
     private func handleCleanupResult(
         _ result: Result<String, Error>,
         originalText: String,
@@ -1066,6 +1077,9 @@ final class DictationController: ObservableObject {
             CrashLog.write("[\(Date())] 丢弃过期清整理结果（gen \(gen) != \(generation)）\n")
             return
         }
+        // 该批次是否仍留在缓冲（未被「清空/Home」等丢弃）。
+        let idSet = Set(ids)
+        let batchExists = bufferBlocks.contains { idSet.contains($0.id) }
         switch result {
         case .success(let cleaned):
             let value = cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1076,13 +1090,16 @@ final class DictationController: ObservableObject {
                     CrashLog.write("[\(Date())] 清整理疑似非改写，保留原文：「\(value)」\n")
                 }
                 markBlocksCleaned(ids)
+                if batchExists { journal.append(activeText: originalText) }
             } else {
                 replaceBlocks(ids, with: value)
+                if batchExists { journal.append(activeText: value) }
             }
         case .failure(let error):
             CrashLog.write("[\(Date())] 清整理失败：\(error.localizedDescription)\n")
             setStatus("清整理失败，已保留原文：\(error.localizedDescription)")
             markBlocksCleaned(ids)
+            if batchExists { journal.append(activeText: originalText) }
         }
         updateBufferUI()
         scheduleCleanupIfNeeded()
@@ -1341,7 +1358,9 @@ final class DictationController: ObservableObject {
 
     private func setState(_ newState: State) {
         guard currentState != newState else { return }
+        let previousState = currentState
         currentState = newState
+        updateSystemMute(from: previousState, to: newState)
         // 离开激活态即撤销切段预警，避免残留的灰点提示。
         if newState != .active {
             updateCutCountdown(nil)
@@ -1350,6 +1369,56 @@ final class DictationController: ObservableObject {
         DispatchQueue.main.async { [weak self] in
             self?.state = value
         }
+    }
+
+    /// 系统静音联动：进入激活时静音默认输出，离开激活时解除静音。
+    /// 仅在「激活时静音系统声音」开启时生效；且只有「本来没静音、由 debuff 触发静音」
+    /// 的情况，离开激活时才解除静音——本来就已经静音的不会去动它。
+    private func updateSystemMute(from previous: State, to current: State) {
+        if current == .active {
+            guard previous != .active, settings.muteSystemAudioWhenActive else { return }
+            didMuteSystemAudio = Self.muteIfNeeded()
+            CrashLog.write("[\(Date())] 激活：静音系统声音 didMute=\(didMuteSystemAudio)\n")
+        } else if previous == .active {
+            releaseSystemMute()
+        }
+    }
+
+    /// 若默认输出当前未静音，则静音并返回 true（表示这次静音由 debuff 触发）；
+    /// 若本来就已经静音，则不做改动并返回 false，避免误取消用户的静音。
+    private static func muteIfNeeded() -> Bool {
+        if SystemAudioOutput.isMuted() == true { return false }
+        return SystemAudioOutput.setMuted(true)
+    }
+
+    /// 解除由 debuff 触发的系统静音（只在确实由我们静音时才动）。用户一请求离开激活
+    /// 就立刻调用，无需等待收尾转写与清整理完成。
+    private func releaseSystemMute() {
+        guard didMuteSystemAudio else { return }
+        didMuteSystemAudio = false
+        let ok = SystemAudioOutput.setMuted(false)
+        CrashLog.write("[\(Date())] 解除系统静音 ok=\(ok)\n")
+    }
+
+    /// 菜单切换「激活时静音系统声音」后调用：若在激活期间被关闭则解除 debuff 造成的静音；
+    /// 若在激活期间被打开则按同样规则静音。
+    func applySystemMuteSetting() {
+        engineQueue.async { [weak self] in
+            guard let self else { return }
+            guard self.currentState == .active else { return }
+            if self.settings.muteSystemAudioWhenActive {
+                if !self.didMuteSystemAudio {
+                    self.didMuteSystemAudio = Self.muteIfNeeded()
+                }
+            } else {
+                self.releaseSystemMute()
+            }
+        }
+    }
+
+    /// 退出前若仍在 debuff 触发的静音中，解除静音。
+    func restoreSystemMute() {
+        releaseSystemMute()
     }
 
     private func setStatus(_ text: String) {

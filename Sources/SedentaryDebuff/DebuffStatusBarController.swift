@@ -36,6 +36,7 @@ final class DebuffStatusBarController: NSObject, NSMenuDelegate {
     private var itemJournalSavedTime: NSMenuItem!
     private var itemDictationURL: NSMenuItem!
     private var itemCleanupEnabled: NSMenuItem!
+    private var itemMuteOnActive: NSMenuItem!
     private var itemCleanupModel: NSMenuItem!
     private var itemDictationHotkey: NSMenuItem!
     private var itemMicParent: NSMenuItem!
@@ -277,6 +278,13 @@ final class DebuffStatusBarController: NSObject, NSMenuDelegate {
             settingsMenu.addItem(it)
             emptyBufferBehaviorItems.append(it)
         }
+
+        settingsMenu.addItem(subHeader("激活时"))
+        itemMuteOnActive = NSMenuItem(title: "静音系统声音", action: #selector(toggleMuteOnActive), keyEquivalent: "")
+        itemMuteOnActive.target = self
+        itemMuteOnActive.setOn(s.muteSystemAudioWhenActive, checkmark: true)
+        itemMuteOnActive.toolTip = "开启后，进入激活状态（开始语音输入）时把系统默认输出静音，避免外放声音被麦克风录入；离开激活（提交/停麦）时只解除由 debuff 造成的静音——如果激活前系统本来就是静音的，则不去改动它。"
+        settingsMenu.addItem(itemMuteOnActive)
 
         settingsMenu.addItem(subHeader("STT 服务地址"))
         itemDictationURL = makeDisabled(s.sttURLString)
@@ -615,6 +623,13 @@ final class DebuffStatusBarController: NSObject, NSMenuDelegate {
         refreshDictationItems()
     }
 
+    @objc private func toggleMuteOnActive() {
+        let s = services.dictation.settings
+        s.muteSystemAudioWhenActive.toggle()
+        services.dictation.applySystemMuteSetting()
+        refreshDictationItems()
+    }
+
     @objc private func editCleanupURL() {
         promptText(
             title: "输入清整理接口地址",
@@ -803,6 +818,7 @@ final class DebuffStatusBarController: NSObject, NSMenuDelegate {
         itemDictationURL.title = s.sttURLString
         itemCleanupEnabled.setOn(s.cleanupEnabled, checkmark: true)
         itemCleanupModel.title = "模型：\(s.cleanupModel)"
+        itemMuteOnActive.setOn(s.muteSystemAudioWhenActive, checkmark: true)
         itemDictationHotkey.title = DictationHotKey.label(keyCode: s.hotkeyKeyCode, flags: s.hotkeyFlags)
         itemMicParent.title = microphoneTitle
         for it in pauseOptionItems {
