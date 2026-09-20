@@ -1,21 +1,6 @@
 import Carbon.HIToolbox
 
 enum DictationHotKey {
-    struct Preset {
-        let keyCode: UInt32
-        let flags: UInt32
-        let label: String
-    }
-
-    static let presets: [Preset] = [
-        Preset(keyCode: 2, flags: UInt32(optionKey), label: "⌥D"),
-        Preset(keyCode: 120, flags: UInt32(optionKey | shiftKey), label: "⌥⇧F2"),
-        Preset(keyCode: 120, flags: UInt32(optionKey | controlKey | shiftKey), label: "⌃⌥⇧F2"),
-        Preset(keyCode: 49, flags: UInt32(cmdKey | optionKey), label: "⌘⌥ 空格"),
-        Preset(keyCode: 49, flags: UInt32(cmdKey | shiftKey), label: "⌘⇧ 空格"),
-        Preset(keyCode: 99, flags: UInt32(optionKey | shiftKey), label: "⌥⇧F3"),
-    ]
-
     /// 固定的 End 键（kVK_End），常驻注册、不随菜单选择变化，也用于激活/非激活切换。
     static let fixedEndKeyCode: UInt32 = 119
     static let fixedEndFlags: UInt32 = 0

@@ -40,6 +40,17 @@ enum DictationMicrophone {
         availableInputDevices().first { $0.uid == uid }?.name
     }
 
+    /// 选一支用于「过渡切换」的输入设备 uid：优先用 preferred（若它可用且不等于
+    /// excluding），否则任取一支其它在线输入。用于把系统默认输入临时切走再切回，
+    /// 以触发互联设备重新握手。找不到可用的过渡设备时返回 nil。
+    static func inputUIDPreferring(_ preferred: String?, excluding uid: String) -> String? {
+        let devices = availableInputDevices()
+        if let preferred, preferred != uid, devices.contains(where: { $0.uid == preferred }) {
+            return preferred
+        }
+        return devices.first { $0.uid != uid }?.uid
+    }
+
     /// 把系统默认输入设备切到指定 uid 的设备。失败（设备不在线等）返回 false。
     static func setDefaultInputDevice(uid: String) -> Bool {
         guard let target = deviceIDs()?.first(where: { deviceUID($0) == uid }) else { return false }

@@ -82,7 +82,10 @@ final class DictationController: ObservableObject {
     /// 首次开启失败时的最大重试次数（退避延迟累加，合计约一分钟）。
     private static let maxBootAttempts = 20
     /// 监听中原地自愈（引擎未运行 / 运行但无数据）的连续失败上限，超过后停止监听避免空转。
-    private static let maxRecoveryStreak = 6
+    /// 互联设备（iPhone 麦克风）重新握手可能需要十几秒，故留出约 30 秒窗口。
+    private static let maxRecoveryStreak = 10
+    /// 全新开启重试时，每隔多少次触发一次「重新选择麦克风」（切走默认输入再切回）。
+    private static let reconnectKickEveryBootAttempts = 5
     /// 健康检查周期。
     private static let healthCheckInterval: TimeInterval = 3
     /// 引擎运行后超过该时长仍收不到输入缓冲即判定僵死。
@@ -166,10 +169,6 @@ final class DictationController: ObservableObject {
         healthTimer = timer
     }
 
-    func applyWaveformWidth() {
-        waveformPanel.setWidth(CGFloat(settings.waveformWidth))
-    }
-
     deinit {
         healthTimer?.cancel()
         healthTimer = nil
@@ -237,19 +236,6 @@ final class DictationController: ObservableObject {
         }
     }
 
-    /// 菜单「开始/停止语音输入」：引擎总开关。
-    func startStop() {
-        engineQueue.async { [weak self] in
-            guard let self else { return }
-            switch self.currentState {
-            case .off:
-                self.requestStart()
-            default:
-                self.stopDictation()
-            }
-        }
-    }
-
     func startDictation() {
         engineQueue.async { [weak self] in
             self?.requestStart()
@@ -260,14 +246,6 @@ final class DictationController: ObservableObject {
     func clearBufferedText() {
         engineQueue.async { [weak self] in
             self?.performClearCommand()
-        }
-    }
-
-    func applyActiveOpacity() {
-        waveformPanel.setActiveOpacity(settings.activeOpacity)
-        DispatchQueue.main.async { [weak self] in
-            guard let self, self.isInputActive else { return }
-            self.waveformPanel.setActive(true)
         }
     }
 
@@ -388,6 +366,12 @@ final class DictationController: ObservableObject {
                 recorder.stop()
                 setStatus("启动麦克风失败：\(error.localizedDescription)")
                 return
+            }
+            // 所选互联设备（iPhone 麦克风等）掉线后常卡在「已列出但不可运行」，光靠重试
+            // start 永远得到 'stop' 错误：周期性把默认输入切走再切回，触发其重新连接。
+            if (autoBootAttempt - 1) % Self.reconnectKickEveryBootAttempts == 0,
+               recorder.reconnectSelectedInputDevice() {
+                CrashLog.write("[\(Date())] 启动失败：已触发所选麦克风重新连接\n")
             }
             CrashLog.write("[\(Date())] 启动麦克风失败（第 \(autoBootAttempt) 次，稍后重试）：\(error.localizedDescription)\n")
             setStatus("启动麦克风失败，正在等待麦克风就绪自动重试…（\(autoBootAttempt)）")
@@ -730,7 +714,14 @@ final class DictationController: ObservableObject {
         segmentSamples.removeAll()
         segmentStart = nil
         vad.reset()
+        // 先丢弃旧引擎（stop 并摘 tap），再触发重连切换，避免仍有引擎在跑时改动默认输入。
         recorder.rebuildEngine()
+        // 所选互联设备（iPhone 麦克风等）掉线后会卡在「已列出但不可运行」，直接重建
+        // 重启只会反复拿到 coreaudio 'stop'：先把默认输入切走再切回，触发其重新握手。
+        if startFailureStreak == 1 || startFailureStreak % Self.reconnectKickEveryBootAttempts == 0,
+           recorder.reconnectSelectedInputDevice() {
+            CrashLog.write("[\(Date())] 已触发所选麦克风重新连接\n")
+        }
         do {
             try recorder.start()
             engineStartedAt = Date()
@@ -1014,7 +1005,8 @@ final class DictationController: ObservableObject {
         DictationCleaner.Configuration(
             urlString: settings.cleanupURLString,
             apiKey: settings.cleanupAPIKey,
-            model: settings.cleanupModel
+            model: settings.cleanupModel,
+            systemPrompt: settings.cleanupSystemPrompt
         )
     }
 
@@ -1398,22 +1390,6 @@ final class DictationController: ObservableObject {
         didMuteSystemAudio = false
         let ok = SystemAudioOutput.setMuted(false)
         CrashLog.write("[\(Date())] 解除系统静音 ok=\(ok)\n")
-    }
-
-    /// 菜单切换「激活时静音系统声音」后调用：若在激活期间被关闭则解除 debuff 造成的静音；
-    /// 若在激活期间被打开则按同样规则静音。
-    func applySystemMuteSetting() {
-        engineQueue.async { [weak self] in
-            guard let self else { return }
-            guard self.currentState == .active else { return }
-            if self.settings.muteSystemAudioWhenActive {
-                if !self.didMuteSystemAudio {
-                    self.didMuteSystemAudio = Self.muteIfNeeded()
-                }
-            } else {
-                self.releaseSystemMute()
-            }
-        }
     }
 
     /// 退出前若仍在 debuff 触发的静音中，解除静音。

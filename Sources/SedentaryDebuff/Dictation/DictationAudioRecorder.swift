@@ -138,6 +138,31 @@ final class DictationAudioRecorder {
         }
     }
 
+    /// 触发所选麦克风重新连接：把系统默认输入先临时切到另一支可用设备、再切回所选设备，
+    /// 等价于用户在设置里把麦克风重新选一次。macOS 的连续性/互联设备（如 iPhone 麦克风）
+    /// 在链路掉线后会停留在「已列出但不可运行」的状态：此时重新 start 引擎只会得到
+    /// coreaudio 'stop' 错误，必须让默认输入发生一次真实变化，系统才会重新发起连接。
+    /// 返回是否真的执行了切换（未选具体设备 / 设备不在线 / 无过渡设备时为 false）。
+    /// 必须在引擎未运行时调用（与 start 同队列）。
+    @discardableResult
+    func reconnectSelectedInputDevice() -> Bool {
+        routingLock.lock()
+        defer { routingLock.unlock() }
+        guard let desired = inputDeviceUID, !desired.isEmpty,
+              DictationMicrophone.name(forUID: desired) != nil else { return false }
+        // 过渡设备优先用接管前的系统默认（若与所选不同），否则任取一支其它在线输入。
+        guard let fallback = DictationMicrophone.inputUIDPreferring(originalDefaultInputUID, excluding: desired) else {
+            return false
+        }
+        // 这里持有 routingLock：默认输入变化监听回调会阻塞在锁上，等我们切回所选设备、
+        // 释放锁之后才运行，此时默认已是目标设备，不会再被抢回。
+        _ = DictationMicrophone.setDefaultInputDevice(uid: fallback)
+        // 留一点时间让 HAL 处理这次变化，避免两次 set 被合并、互联设备不重新握手。
+        Thread.sleep(forTimeInterval: 0.2)
+        _ = DictationMicrophone.setDefaultInputDevice(uid: desired)
+        return true
+    }
+
     /// 系统默认输入被外部改动（如所选设备拔出后系统回退）时回调：所选设备仍在则
     /// 重新切回（避免系统把默认输入悄悄切走，导致本会话录到别的麦克风）；所选设备已
     /// 消失则放弃接管，跟随系统回退后的默认输入继续（由健康检查自动续麦）。

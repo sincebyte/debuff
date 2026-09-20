@@ -27,26 +27,17 @@ final class DebuffStatusBarController: NSObject, NSMenuDelegate {
     private var itemFeishuStatus: NSMenuItem!
     private var itemHUD: NSMenuItem!
 
-    private var itemDictationToggle: NSMenuItem!
-    private var itemDictationStatus: NSMenuItem!
-    private var itemDictationHint: NSMenuItem!
-    private var itemJournalToggle: NSMenuItem!
-    private var itemJournalOpen: NSMenuItem!
+    private var journalCheckbox: NSButton!
     private var itemJournalTodayText: NSMenuItem!
     private var itemJournalSavedTime: NSMenuItem!
     private var itemDictationURL: NSMenuItem!
-    private var itemCleanupEnabled: NSMenuItem!
-    private var itemMuteOnActive: NSMenuItem!
-    private var itemCleanupModel: NSMenuItem!
+    private var cleanupCheckbox: NSButton!
     private var itemDictationHotkey: NSMenuItem!
     private var itemMicParent: NSMenuItem!
+    private var emptyBufferCheckbox: NSButton!
     private var micMenu: NSMenu!
-    private var pauseOptionItems: [NSMenuItem] = []
-    private var maxSegmentItems: [NSMenuItem] = []
-    private var activeOpacityItems: [NSMenuItem] = []
-    private var waveformWidthItems: [NSMenuItem] = []
-    private var emptyBufferBehaviorItems: [NSMenuItem] = []
-    private var hotkeyPresetItems: [NSMenuItem] = []
+    private var pauseValueButtons: [NSButton] = []
+    private var maxSegmentValueButtons: [NSButton] = []
 
     private var updateTimer: AnyCancellable?
     private var dataCancellables = Set<AnyCancellable>()
@@ -198,27 +189,15 @@ final class DebuffStatusBarController: NSObject, NSMenuDelegate {
         let s = d.settings
 
         rootMenu.addItem(NSMenuItem.separator())
-        addHeader("语音输入")
 
-        itemDictationToggle = NSMenuItem(title: dictationToggleTitle, action: #selector(toggleDictation), keyEquivalent: "")
-        itemDictationToggle.target = self
-        rootMenu.addItem(itemDictationToggle)
-
-        itemDictationStatus = makeDisabled("")
-        rootMenu.addItem(itemDictationStatus)
-
-        itemDictationHint = makeDisabled("激活中说话，文字先显示在光波下方 · 按 \(DictationHotKey.label(keyCode: s.hotkeyKeyCode, flags: s.hotkeyFlags))/End 粘贴待命 · Home 清空")
-        itemDictationHint.toolTip = "激活期间转写的文字不再直接粘贴，而是逐段显示在光波面板下方的滚动区（鼠标悬停即可上下滚轮浏览），上下边界渐隐；把光标放进目标输入框后，按主快捷键 \(DictationHotKey.label(keyCode: s.hotkeyKeyCode, flags: s.hotkeyFlags)) 或固定 End 键，会把缓冲内容整段粘贴到当前光标、清空缓冲并进入非激活待命。按固定 Home 键清空尚未提交的缓冲文本。语音「over」等同提交；「清空/clear」清空缓冲文本；「发送」把缓冲粘贴到当前光标后回车；「删除/撤销」仍在当前输入框删一个词。非激活待命只驱动波形不做识别（语音日记也只记录激活状态转写的内容）。缓冲为空时可在「设置 → 空文本时」选择保留非激活文本框或收起只留波形。上方菜单项负责开启/关停麦克风。"
-        rootMenu.addItem(itemDictationHint)
-
-        itemJournalToggle = NSMenuItem(title: journalToggleTitle, action: #selector(toggleJournal), keyEquivalent: "")
-        itemJournalToggle.target = self
-        itemJournalToggle.setOn(s.journalEnabled, checkmark: true)
-        itemJournalToggle.toolTip = "开启后，激活语音转写并上屏/发送的内容会逐条带「日期+时分秒」追加到桌面 语音日记/当天日期.txt；非激活待命不后台录音转写，杂音不进日记。纯指令词（over/发送/清空等）不入日记。下方的今日字数与累计节约统计始终跟随激活语音输入累计，与是否写入桌面文件无关。"
-        rootMenu.addItem(itemJournalToggle)
-        itemJournalOpen = NSMenuItem(title: "打开语音日记目录…", action: #selector(openJournalFolder), keyEquivalent: "")
-        itemJournalOpen.target = self
-        rootMenu.addItem(itemJournalOpen)
+        let journalRow = checkmarkRow(
+            title: journalToggleTitle,
+            isOn: s.journalEnabled,
+            toolTip: "开启后，激活语音转写并上屏/发送的内容会逐条带「日期+时分秒」追加到桌面 语音日记/当天日期.txt；非激活待命不后台录音转写，杂音不进日记。纯指令词（over/发送/清空等）不入日记。下方的今日字数与累计节约统计始终跟随激活语音输入累计，与是否写入桌面文件无关。",
+            action: #selector(toggleJournal(_:))
+        )
+        journalCheckbox = journalRow.button
+        rootMenu.addItem(journalRow.item)
 
         itemJournalTodayText = makeDisabled("")
         itemJournalTodayText.toolTip = "今日激活语音转写的字符数（跨自然日自动清零重计）。"
@@ -230,93 +209,67 @@ final class DebuffStatusBarController: NSObject, NSMenuDelegate {
         let settingsMenu = NSMenu()
 
         settingsMenu.addItem(subHeader("停顿判定（秒）"))
-        for v in DictationSettings.pausePresets {
-            let it = NSMenuItem(title: String(format: "%.1f 秒", v), action: #selector(selectPause(_:)), keyEquivalent: "")
-            it.target = self
-            it.representedObject = NSNumber(value: v)
-            it.state = abs(v - s.pauseSilenceSeconds) < 0.0001 ? .on : .off
-            settingsMenu.addItem(it)
-            pauseOptionItems.append(it)
+        pauseValueButtons = []
+        for (index, v) in DictationSettings.pausePresets.enumerated() {
+            let row = radioRow(
+                title: String(format: "%.1f 秒", v),
+                isOn: abs(v - s.pauseSilenceSeconds) < 0.0001,
+                tag: index,
+                action: #selector(selectPause(_:))
+            )
+            settingsMenu.addItem(row.item)
+            pauseValueButtons.append(row.button)
         }
 
+        settingsMenu.addItem(NSMenuItem.separator())
         settingsMenu.addItem(subHeader("最大切段（秒）"))
-        for v in DictationSettings.maxSegmentPresets {
-            let it = NSMenuItem(title: "\(Int(v)) 秒", action: #selector(selectMaxSegment(_:)), keyEquivalent: "")
-            it.target = self
-            it.representedObject = NSNumber(value: v)
-            it.state = abs(v - s.maxSegmentSeconds) < 0.0001 ? .on : .off
-            settingsMenu.addItem(it)
-            maxSegmentItems.append(it)
+        maxSegmentValueButtons = []
+        for (index, v) in DictationSettings.maxSegmentPresets.enumerated() {
+            let row = radioRow(
+                title: "\(Int(v)) 秒",
+                isOn: abs(v - s.maxSegmentSeconds) < 0.0001,
+                tag: index,
+                action: #selector(selectMaxSegment(_:))
+            )
+            settingsMenu.addItem(row.item)
+            maxSegmentValueButtons.append(row.button)
         }
 
-        settingsMenu.addItem(subHeader("激活状态透明度"))
-        for v in DictationSettings.activeOpacityPresets {
-            let it = NSMenuItem(title: String(format: "%.2f", v), action: #selector(selectActiveOpacity(_:)), keyEquivalent: "")
-            it.target = self
-            it.representedObject = NSNumber(value: v)
-            it.state = abs(v - s.activeOpacity) < 0.0001 ? .on : .off
-            settingsMenu.addItem(it)
-            activeOpacityItems.append(it)
-        }
+        settingsMenu.addItem(NSMenuItem.separator())
+        let emptyBufferRow = checkmarkRow(
+            title: "空文本时保留文本框",
+            isOn: s.emptyBufferBehavior == .inactive,
+            toolTip: "勾选：缓冲为空时保留文本框与按钮，以非激活（降低透明度）状态显示；不勾选：收起文本框与按钮，只保留波形。",
+            action: #selector(toggleEmptyBufferBehavior(_:))
+        )
+        emptyBufferCheckbox = emptyBufferRow.button
+        settingsMenu.addItem(emptyBufferRow.item)
 
-        settingsMenu.addItem(subHeader("波形宽度"))
-        for v in DictationSettings.waveformWidthPresets {
-            let it = NSMenuItem(title: waveformWidthLabel(v), action: #selector(selectWaveformWidth(_:)), keyEquivalent: "")
-            it.target = self
-            it.representedObject = NSNumber(value: v)
-            it.state = abs(v - s.waveformWidth) < 0.0001 ? .on : .off
-            settingsMenu.addItem(it)
-            waveformWidthItems.append(it)
-        }
-
-        settingsMenu.addItem(subHeader("空文本时"))
-        for behavior in DictationSettings.EmptyBufferBehavior.allCases {
-            let it = NSMenuItem(title: emptyBufferBehaviorLabel(behavior), action: #selector(selectEmptyBufferBehavior(_:)), keyEquivalent: "")
-            it.target = self
-            it.representedObject = behavior.rawValue
-            it.state = s.emptyBufferBehavior == behavior ? .on : .off
-            settingsMenu.addItem(it)
-            emptyBufferBehaviorItems.append(it)
-        }
-
-        settingsMenu.addItem(subHeader("激活时"))
-        itemMuteOnActive = NSMenuItem(title: "静音系统声音", action: #selector(toggleMuteOnActive), keyEquivalent: "")
-        itemMuteOnActive.target = self
-        itemMuteOnActive.setOn(s.muteSystemAudioWhenActive, checkmark: true)
-        itemMuteOnActive.toolTip = "开启后，进入激活状态（开始语音输入）时把系统默认输出静音，避免外放声音被麦克风录入；离开激活（提交/停麦）时只解除由 debuff 造成的静音——如果激活前系统本来就是静音的，则不去改动它。"
-        settingsMenu.addItem(itemMuteOnActive)
-
+        settingsMenu.addItem(NSMenuItem.separator())
         settingsMenu.addItem(subHeader("STT 服务地址"))
         itemDictationURL = makeDisabled(s.sttURLString)
         settingsMenu.addItem(itemDictationURL)
         settingsMenu.addItem(NSMenuItem(title: "输入地址…", action: #selector(editSTTURL), keyEquivalent: "").apply { $0.target = self })
         settingsMenu.addItem(NSMenuItem(title: "恢复默认", action: #selector(resetSTTURL), keyEquivalent: "").apply { $0.target = self })
 
+        settingsMenu.addItem(NSMenuItem.separator())
         settingsMenu.addItem(subHeader("文本清整理（大模型）"))
-        itemCleanupEnabled = NSMenuItem(title: "启用清整理（错别字/重复词）", action: #selector(toggleCleanup), keyEquivalent: "")
-        itemCleanupEnabled.target = self
-        itemCleanupEnabled.setOn(s.cleanupEnabled, checkmark: true)
-        itemCleanupEnabled.toolTip = "开启后，每次 ASR 转写出的文字会拉通尚未整理的部分交给大模型做「清整理」：纠正错别字/同音字、删除重复词与口水词、补全标点。整理完成后才允许提交粘贴，确保上屏的是整理后的文本。"
-        settingsMenu.addItem(itemCleanupEnabled)
-        itemCleanupModel = makeDisabled("模型：\(s.cleanupModel)")
-        settingsMenu.addItem(itemCleanupModel)
-        settingsMenu.addItem(NSMenuItem(title: "输入接口地址…", action: #selector(editCleanupURL), keyEquivalent: "").apply { $0.target = self })
-        settingsMenu.addItem(NSMenuItem(title: "输入模型名…", action: #selector(editCleanupModel), keyEquivalent: "").apply { $0.target = self })
-        settingsMenu.addItem(NSMenuItem(title: "设置 API Key…", action: #selector(editCleanupKey), keyEquivalent: "").apply { $0.target = self })
+        let cleanupRow = checkmarkRow(
+            title: "启用清整理（错别字/重复词）",
+            isOn: s.cleanupEnabled,
+            toolTip: "开启后，每次 ASR 转写出的文字会拉通尚未整理的部分交给大模型做「清整理」：纠正错别字/同音字、删除重复词与口水词、补全标点。整理完成后才允许提交粘贴，确保上屏的是整理后的文本。",
+            action: #selector(toggleCleanup(_:))
+        )
+        cleanupCheckbox = cleanupRow.button
+        settingsMenu.addItem(cleanupRow.item)
+        settingsMenu.addItem(NSMenuItem(title: "设置 DeepSeek API Key…", action: #selector(editCleanupKey), keyEquivalent: "").apply { $0.target = self })
+        settingsMenu.addItem(NSMenuItem(title: "编辑提示词…", action: #selector(editCleanupPrompt), keyEquivalent: "").apply { $0.target = self })
         settingsMenu.addItem(NSMenuItem(title: "恢复默认", action: #selector(resetCleanup), keyEquivalent: "").apply { $0.target = self })
 
+        settingsMenu.addItem(NSMenuItem.separator())
         settingsMenu.addItem(subHeader("快捷键"))
         itemDictationHotkey = makeDisabled(DictationHotKey.label(keyCode: s.hotkeyKeyCode, flags: s.hotkeyFlags))
         settingsMenu.addItem(itemDictationHotkey)
-        for p in DictationHotKey.presets {
-            let it = NSMenuItem(title: p.label, action: #selector(selectHotkey(_:)), keyEquivalent: "")
-            it.target = self
-            it.representedObject = p
-            it.state = (p.keyCode == s.hotkeyKeyCode && p.flags == s.hotkeyFlags) ? .on : .off
-            settingsMenu.addItem(it)
-            hotkeyPresetItems.append(it)
-        }
-        settingsMenu.addItem(makeDisabled("End（固定）＝ 激活/非激活切换 · Home（固定）＝ 清空缓冲"))
 
         let settingsParent = NSMenuItem(title: "设置", action: nil, keyEquivalent: "")
         settingsParent.submenu = settingsMenu
@@ -329,13 +282,8 @@ final class DebuffStatusBarController: NSObject, NSMenuDelegate {
         rootMenu.addItem(itemMicParent)
         rebuildMicMenu()
 
-        rootMenu.addItem(NSMenuItem(title: "测试服务连接", action: #selector(testDictationConnection), keyEquivalent: "").apply { $0.target = self })
-        rootMenu.addItem(NSMenuItem(title: "测试清整理连接", action: #selector(testCleanupConnection), keyEquivalent: "").apply { $0.target = self })
-        rootMenu.addItem(NSMenuItem(title: "辅助功能设置…", action: #selector(openAccessibilitySettings), keyEquivalent: "").apply { $0.target = self })
-    }
-
-    private var dictationToggleTitle: String {
-        services.dictation.isEngineOn ? "停止语音输入" : "开始语音输入"
+        rootMenu.addItem(NSMenuItem(title: "测试 ASR 服务连接", action: #selector(testDictationConnection), keyEquivalent: "").apply { $0.target = self })
+        rootMenu.addItem(NSMenuItem(title: "测试大语言模型连接", action: #selector(testCleanupConnection), keyEquivalent: "").apply { $0.target = self })
     }
 
     private var journalToggleTitle: String {
@@ -463,87 +411,26 @@ final class DebuffStatusBarController: NSObject, NSMenuDelegate {
         services.debuffHUDVisibility.isEnabled.toggle()
     }
 
-    @objc private func toggleDictation() {
-        services.dictation.startStop()
-    }
-
-    @objc private func toggleJournal() {
-        services.dictation.settings.journalEnabled.toggle()
+    @objc private func toggleJournal(_ sender: NSButton) {
+        services.dictation.settings.journalEnabled = sender.state == .on
         refreshDictationItems()
     }
 
-    @objc private func openJournalFolder() {
-        NSApp.activate(ignoringOtherApps: true)
-        let fileManager = FileManager.default
-        let desktop = fileManager.urls(for: .desktopDirectory, in: .userDomainMask).first
-            ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Desktop", isDirectory: true)
-        let folder = desktop.appendingPathComponent("语音日记", isDirectory: true)
-        try? fileManager.createDirectory(at: folder, withIntermediateDirectories: true)
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.dateFormat = "yyyy-MM-dd"
-        let today = folder.appendingPathComponent("\(formatter.string(from: Date())).txt")
-        if fileManager.fileExists(atPath: today.path) {
-            NSWorkspace.shared.activateFileViewerSelecting([today])
-        } else {
-            NSWorkspace.shared.open(folder)
-        }
-    }
-
-    @objc private func selectPause(_ sender: NSMenuItem) {
-        guard let n = sender.representedObject as? NSNumber else { return }
-        services.dictation.settings.pauseSilenceSeconds = n.doubleValue
+    @objc private func selectPause(_ sender: NSButton) {
+        guard DictationSettings.pausePresets.indices.contains(sender.tag) else { return }
+        services.dictation.settings.pauseSilenceSeconds = DictationSettings.pausePresets[sender.tag]
         refreshDictationItems()
     }
 
-    @objc private func selectMaxSegment(_ sender: NSMenuItem) {
-        guard let n = sender.representedObject as? NSNumber else { return }
-        services.dictation.settings.maxSegmentSeconds = n.doubleValue
+    @objc private func selectMaxSegment(_ sender: NSButton) {
+        guard DictationSettings.maxSegmentPresets.indices.contains(sender.tag) else { return }
+        services.dictation.settings.maxSegmentSeconds = DictationSettings.maxSegmentPresets[sender.tag]
         refreshDictationItems()
     }
 
-    @objc private func selectActiveOpacity(_ sender: NSMenuItem) {
-        guard let n = sender.representedObject as? NSNumber else { return }
-        services.dictation.settings.activeOpacity = n.doubleValue
-        services.dictation.applyActiveOpacity()
-        refreshDictationItems()
-    }
-
-    @objc private func selectWaveformWidth(_ sender: NSMenuItem) {
-        guard let n = sender.representedObject as? NSNumber else { return }
-        services.dictation.settings.waveformWidth = n.doubleValue
-        services.dictation.applyWaveformWidth()
-        refreshDictationItems()
-    }
-
-    private func waveformWidthLabel(_ v: Double) -> String {
-        switch Int(v) {
-        case 35: return "35（圆点）"
-        case 167: return "167（标准）"
-        default: return "\(Int(v))"
-        }
-    }
-
-    @objc private func selectEmptyBufferBehavior(_ sender: NSMenuItem) {
-        guard let raw = sender.representedObject as? String,
-              let behavior = DictationSettings.EmptyBufferBehavior(rawValue: raw) else { return }
-        services.dictation.settings.emptyBufferBehavior = behavior
+    @objc private func toggleEmptyBufferBehavior(_ sender: NSButton) {
+        services.dictation.settings.emptyBufferBehavior = sender.state == .on ? .inactive : .collapse
         services.dictation.applyEmptyBufferBehavior()
-        refreshDictationItems()
-    }
-
-    private func emptyBufferBehaviorLabel(_ behavior: DictationSettings.EmptyBufferBehavior) -> String {
-        switch behavior {
-        case .inactive: return "保留文本框（非激活显示）"
-        case .collapse: return "收起文本框与按钮"
-        }
-    }
-
-    @objc private func selectHotkey(_ sender: NSMenuItem) {
-        guard let preset = sender.representedObject as? DictationHotKey.Preset else { return }
-        services.dictation.settings.hotkeyKeyCode = preset.keyCode
-        services.dictation.settings.hotkeyFlags = preset.flags
-        services.dictation.applyHotkey()
         refreshDictationItems()
     }
 
@@ -616,44 +503,10 @@ final class DebuffStatusBarController: NSObject, NSMenuDelegate {
         refreshDictationItems()
     }
 
-    @objc private func toggleCleanup() {
-        let s = services.dictation.settings
-        s.cleanupEnabled.toggle()
+    @objc private func toggleCleanup(_ sender: NSButton) {
+        services.dictation.settings.cleanupEnabled = sender.state == .on
         services.dictation.applyCleanupSettings()
         refreshDictationItems()
-    }
-
-    @objc private func toggleMuteOnActive() {
-        let s = services.dictation.settings
-        s.muteSystemAudioWhenActive.toggle()
-        services.dictation.applySystemMuteSetting()
-        refreshDictationItems()
-    }
-
-    @objc private func editCleanupURL() {
-        promptText(
-            title: "输入清整理接口地址",
-            message: "OpenAI 兼容的 Chat Completions 完整 URL，例如：\(DictationSettings.defaultCleanupURL)",
-            current: services.dictation.settings.cleanupURLString
-        ) { [weak self] value in
-            guard let self, !value.isEmpty else { return }
-            self.services.dictation.settings.cleanupURLString = value
-            self.services.dictation.applyCleanupSettings()
-            self.refreshDictationItems()
-        }
-    }
-
-    @objc private func editCleanupModel() {
-        promptText(
-            title: "输入清整理模型名",
-            message: "例如：\(DictationSettings.defaultCleanupModel)",
-            current: services.dictation.settings.cleanupModel
-        ) { [weak self] value in
-            guard let self, !value.isEmpty else { return }
-            self.services.dictation.settings.cleanupModel = value
-            self.services.dictation.applyCleanupSettings()
-            self.refreshDictationItems()
-        }
     }
 
     @objc private func editCleanupKey() {
@@ -670,11 +523,28 @@ final class DebuffStatusBarController: NSObject, NSMenuDelegate {
         }
     }
 
+    @objc private func editCleanupPrompt() {
+        promptMultilineText(
+            title: "编辑清整理提示词",
+            message: "发送给大模型的 system 提示词，可自行修改并保存；留空则恢复默认。",
+            current: services.dictation.settings.cleanupSystemPrompt
+        ) { [weak self] value in
+            guard let self else { return }
+            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            self.services.dictation.settings.cleanupSystemPrompt = trimmed.isEmpty
+                ? DictationSettings.defaultCleanupSystemPrompt
+                : value
+            self.services.dictation.applyCleanupSettings()
+            self.refreshDictationItems()
+        }
+    }
+
     @objc private func resetCleanup() {
         let s = services.dictation.settings
         s.cleanupURLString = DictationSettings.defaultCleanupURL
         s.cleanupModel = DictationSettings.defaultCleanupModel
         s.cleanupAPIKey = DictationSettings.defaultCleanupAPIKey
+        s.cleanupSystemPrompt = DictationSettings.defaultCleanupSystemPrompt
         services.dictation.applyCleanupSettings()
         refreshDictationItems()
     }
@@ -713,6 +583,34 @@ final class DebuffStatusBarController: NSObject, NSMenuDelegate {
         }
     }
 
+    private func promptMultilineText(
+        title: String,
+        message: String,
+        current: String,
+        apply: @escaping (String) -> Void
+    ) {
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = message
+        let scrollView = NSTextView.scrollableTextView()
+        scrollView.frame = NSRect(x: 0, y: 0, width: 520, height: 320)
+        if let textView = scrollView.documentView as? NSTextView {
+            textView.string = current
+            textView.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
+            textView.isAutomaticQuoteSubstitutionEnabled = false
+            textView.isAutomaticDashSubstitutionEnabled = false
+            textView.isAutomaticTextReplacementEnabled = false
+        }
+        alert.accessoryView = scrollView
+        alert.addButton(withTitle: "保存")
+        alert.addButton(withTitle: "取消")
+        if alert.runModal() == .alertFirstButtonReturn,
+           let textView = scrollView.documentView as? NSTextView {
+            apply(textView.string)
+        }
+    }
+
     @objc private func testDictationConnection() {
         NSApp.activate(ignoringOtherApps: true)
         services.dictation.checkConnection { ok, message in
@@ -721,13 +619,6 @@ final class DebuffStatusBarController: NSObject, NSMenuDelegate {
             alert.informativeText = message
             alert.addButton(withTitle: "好")
             alert.runModal()
-        }
-    }
-
-    @objc private func openAccessibilitySettings() {
-        let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
-        if let url {
-            NSWorkspace.shared.open(url)
         }
     }
 
@@ -749,6 +640,51 @@ final class DebuffStatusBarController: NSObject, NSMenuDelegate {
         let i = NSMenuItem(title: t, action: nil, keyEquivalent: "")
         i.isEnabled = false
         return i
+    }
+
+    // MARK: - 视图型菜单项（勾选后菜单不收起，方便连续调整；点菜单外部仍会收起）
+
+    /// 把 NSButton 装进菜单项：点击由控件消费，菜单保持展开。
+    private func viewRow(button: NSButton) -> (item: NSMenuItem, button: NSButton) {
+        button.font = .menuFont(ofSize: 0)
+        button.sizeToFit()
+        let height = max(22, button.frame.height + 4)
+        let width = max(240, button.frame.width + 24)
+        button.frame = NSRect(
+            x: 14,
+            y: (height - button.frame.height) / 2,
+            width: width - 20,
+            height: button.frame.height
+        )
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: width, height: height))
+        container.addSubview(button)
+        let item = NSMenuItem()
+        item.view = container
+        return (item, button)
+    }
+
+    private func checkmarkRow(
+        title: String,
+        isOn: Bool,
+        toolTip: String? = nil,
+        action: Selector
+    ) -> (item: NSMenuItem, button: NSButton) {
+        let button = NSButton(checkboxWithTitle: title, target: self, action: action)
+        button.state = isOn ? .on : .off
+        button.toolTip = toolTip
+        return viewRow(button: button)
+    }
+
+    private func radioRow(
+        title: String,
+        isOn: Bool,
+        tag: Int,
+        action: Selector
+    ) -> (item: NSMenuItem, button: NSButton) {
+        let button = NSButton(radioButtonWithTitle: title, target: self, action: action)
+        button.state = isOn ? .on : .off
+        button.tag = tag
+        return viewRow(button: button)
     }
 
     // MARK: - 刷新（只改 title，整棵 `NSMenu` 结构不替换，子菜单不会“被拆掉”）
@@ -807,43 +743,23 @@ final class DebuffStatusBarController: NSObject, NSMenuDelegate {
     }
 
     private func refreshDictationItems() {
-        guard itemDictationToggle != nil else { return }
-        let d = services.dictation
-        let s = d.settings
-        itemDictationToggle.title = dictationToggleTitle
-        itemDictationStatus.title = d.statusText
-        itemJournalToggle.setOn(s.journalEnabled, checkmark: true)
+        guard journalCheckbox != nil else { return }
+        let s = services.dictation.settings
+        journalCheckbox.state = s.journalEnabled ? .on : .off
+        cleanupCheckbox.state = s.cleanupEnabled ? .on : .off
+        emptyBufferCheckbox.state = s.emptyBufferBehavior == .inactive ? .on : .off
         itemJournalTodayText.title = journalTodayLine
         itemJournalSavedTime.title = journalSavedLine
         itemDictationURL.title = s.sttURLString
-        itemCleanupEnabled.setOn(s.cleanupEnabled, checkmark: true)
-        itemCleanupModel.title = "模型：\(s.cleanupModel)"
-        itemMuteOnActive.setOn(s.muteSystemAudioWhenActive, checkmark: true)
         itemDictationHotkey.title = DictationHotKey.label(keyCode: s.hotkeyKeyCode, flags: s.hotkeyFlags)
         itemMicParent.title = microphoneTitle
-        for it in pauseOptionItems {
-            guard let n = it.representedObject as? NSNumber else { continue }
-            it.state = abs(n.doubleValue - s.pauseSilenceSeconds) < 0.0001 ? .on : .off
+        for (index, button) in pauseValueButtons.enumerated() {
+            let selected = abs(DictationSettings.pausePresets[index] - s.pauseSilenceSeconds) < 0.0001
+            button.state = selected ? .on : .off
         }
-        for it in maxSegmentItems {
-            guard let n = it.representedObject as? NSNumber else { continue }
-            it.state = abs(n.doubleValue - s.maxSegmentSeconds) < 0.0001 ? .on : .off
-        }
-        for it in activeOpacityItems {
-            guard let n = it.representedObject as? NSNumber else { continue }
-            it.state = abs(n.doubleValue - s.activeOpacity) < 0.0001 ? .on : .off
-        }
-        for it in waveformWidthItems {
-            guard let n = it.representedObject as? NSNumber else { continue }
-            it.state = abs(n.doubleValue - s.waveformWidth) < 0.0001 ? .on : .off
-        }
-        for it in emptyBufferBehaviorItems {
-            guard let raw = it.representedObject as? String else { continue }
-            it.state = (raw == s.emptyBufferBehavior.rawValue) ? .on : .off
-        }
-        for it in hotkeyPresetItems {
-            guard let preset = it.representedObject as? DictationHotKey.Preset else { continue }
-            it.state = (preset.keyCode == s.hotkeyKeyCode && preset.flags == s.hotkeyFlags) ? .on : .off
+        for (index, button) in maxSegmentValueButtons.enumerated() {
+            let selected = abs(DictationSettings.maxSegmentPresets[index] - s.maxSegmentSeconds) < 0.0001
+            button.state = selected ? .on : .off
         }
     }
 
