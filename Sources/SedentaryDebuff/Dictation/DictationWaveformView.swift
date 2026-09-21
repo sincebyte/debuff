@@ -24,11 +24,6 @@ struct DictationWaveformView: View {
     private let emptyBufferOpacity = 0.35
     private let activeBarColor = Color(red: 0.3, green: 0.92, blue: 0.6)
     private let standbyBarColor = Color(red: 0.72, green: 0.72, blue: 0.75)
-    /// 右侧麦克风图标占用的宽度：该处不绘制音柱，露出面板底板作为图标背景。
-    private let micReserveWidth: CGFloat = 20
-    /// 麦克风图标「先别说话」的灰色；绿色直接复用激活音柱色。
-    private let micHoldColor = Color(red: 0.6, green: 0.6, blue: 0.64)
-    private let micIconSize: CGFloat = 12
     /// 转写/清整理中的全宽进度条：单条曲线由快到慢自然逼近上限，结果返回时收起。
     /// 上限不到 100%，避免提前满格后长时间卡住。
     private let loadingCap: CGFloat = 0.94
@@ -40,6 +35,9 @@ struct DictationWaveformView: View {
     private let barHeight: CGFloat = 20
     /// 面板底板圆角。
     private let panelCornerRadius: CGFloat = 8
+    /// 面板内向描边：沿圆角内侧勾一圈细边，让整块 UI 的轮廓更清晰。
+    private let panelBorderWidth: CGFloat = 1.5
+    private let panelBorderColor = Color.white.opacity(0.35)
     /// 面板外围底板的内边距：底板完整包裹内容，录屏时中间无背景缝隙。
     private let boardPadding: CGFloat = 4
     /// 波形条与缓冲文本区间距（与布局层一致）。
@@ -73,6 +71,11 @@ struct DictationWaveformView: View {
         }
         .clipShape(RoundedRectangle(cornerRadius: panelCornerRadius, style: .continuous))
         .background(panelBackground)
+        // 向内描边置于最上层：`strokeBorder` 只画在圆角内侧，不被底板或内容遮挡。
+        .overlay {
+            RoundedRectangle(cornerRadius: panelCornerRadius, style: .continuous)
+                .strokeBorder(panelBorderColor, lineWidth: panelBorderWidth)
+        }
         // 一旦开始处理立即显示覆盖层（不等下一帧），避免起点先闪一下波形；
         // 这里不重置进度：真正的新一轮由空闲迟滞归零，阶段交接不受影响。
         .onChange(of: state.showsLoading) { showing in
@@ -95,27 +98,19 @@ struct DictationWaveformView: View {
     }
 
     private var waveformBar: some View {
-        // 转写时整段波形让位，由 loading 覆盖；临近切段则在右缘叠加不透明倒计时。
-        // 倒计时为叠加层，不参与布局，因此不会把波形挤窄。
-        ZStack(alignment: .trailing) {
-            Canvas { context, size in
-                let _ = tick
-                drawBars(in: &context, size: size)
-            }
-            // 直接画在统一底板上，不再单独给音柱做背景/边框；只让内容随激活态在
-            // 透明度与颜色（激活绿 / 待命灰）上变化，整体与面板底板保持一致。
-            .opacity(state.isActive ? state.activeOpacity : standbyOpacity)
-            .animation(.easeInOut(duration: 0.2), value: state.isActive)
-            // 覆盖整段波形：进度条在时波形整体隐去，铺满该区域。
-            // 结果返回时波形与进度条同帧切换，显式禁用动画，避免「先亮波形、再退背景」的闪烁。
-            .opacity(overlayVisible ? 0 : 1)
-            .animation(nil, value: overlayVisible)
-
-            // loading 时进度条独享整条，麦克风图标让位。
-            if !overlayVisible {
-                micBadge
-            }
+        // 波形占满整列宽度：不再为麦克风图标预留右侧区域。
+        Canvas { context, size in
+            let _ = tick
+            drawBars(in: &context, size: size)
         }
+        // 直接画在统一底板上，不再单独给音柱做背景/边框；只让内容随激活态在
+        // 透明度与颜色（激活绿 / 待命灰）上变化，整体与面板底板保持一致。
+        .opacity(state.isActive ? state.activeOpacity : standbyOpacity)
+        .animation(.easeInOut(duration: 0.2), value: state.isActive)
+        // 覆盖整段波形：进度条在时波形整体隐去，铺满该区域。
+        // 结果返回时波形与进度条同帧切换，显式禁用动画，避免「先亮波形、再退背景」的闪烁。
+        .opacity(overlayVisible ? 0 : 1)
+        .animation(nil, value: overlayVisible)
         .onReceive(timer) { _ in
             // 每帧先更新进度/覆盖层的迟滞状态（与是否在监听无关），再决定是否需要重绘波形。
             updateLoadingPresentation()
@@ -180,17 +175,6 @@ struct DictationWaveformView: View {
         return max(0.6, total)
     }
 
-    /// 右侧麦克风提示：常驻在波形右缘，用颜色而非数字表示当前能否说话。
-    /// 绿色=可以说话；灰色=先别说话（临近强制切段，或未激活/待命）。
-    private var micBadge: some View {
-        Image(systemName: "mic.fill")
-            .font(.system(size: micIconSize, weight: .semibold))
-            .foregroundColor(state.micHint == .go ? activeBarColor : micHoldColor)
-            .frame(width: micReserveWidth, height: barHeight)
-            .padding(.trailing, 2)
-            .animation(.easeInOut(duration: 0.2), value: state.micHint)
-    }
-
     /// 光波下方的滚动缓冲：逐段展示激活期间转写的文本，最新一句始终滚到底部。
     private var bufferScroll: some View {
         ScrollViewReader { proxy in
@@ -208,11 +192,12 @@ struct DictationWaveformView: View {
                         .frame(height: 1)
                         .id(Self.bufferBottomID)
                 }
-                .padding(.horizontal, 8)
+                // 文本左右留一点内边距，与波形条的绘制内缩（inset）对齐，不贴到面板边缘。
+                .padding(.horizontal, 4)
                 .padding(.top, 1)
                 .padding(.bottom, 8)
             }
-            .onChange(of: state.bufferLines.count) { _ in
+            .onChange(of: state.bufferLines) { _ in
                 withAnimation(.easeOut(duration: 0.15)) {
                     proxy.scrollTo(Self.bufferBottomID, anchor: .bottom)
                 }
@@ -231,9 +216,8 @@ struct DictationWaveformView: View {
         guard !raw.isEmpty else { return }
 
         let inset: CGFloat = 4
-        // 麦克风图标常驻右侧一小段：该处不绘制音柱，露出底板作为图标背景。
-        let rightReserve = micReserveWidth
-        let contentWidth = max(4, size.width - inset * 2 - rightReserve)
+        // 波形占满整列：不再为麦克风图标预留右侧区域。
+        let contentWidth = max(4, size.width - inset * 2)
 
         // 音柱固定宽度/间距，容器加宽时只增加柱数或拉大间距，绝不放大音柱
         let barWidth: CGFloat = 3.0

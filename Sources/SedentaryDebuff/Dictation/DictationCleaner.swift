@@ -104,10 +104,10 @@ final class DictationCleaner {
         }
     }
 
-    /// 已关闭推理链，输出只含整理后的正文：token 上限够放下与输入等长的结果即可，
-    /// 给足余量但不过大，避免极端输入下生成失控。
+    /// 已关闭推理链，输出只含整理后的正文。清整理改为对整段缓冲一次性整理，输入可能较长，
+    /// 因此 token 上限按整段字数给足余量（中文约 1 字≈1 token，*2 已足够容纳改写与换行）。
     private static func maxTokens(forCharacters count: Int) -> Int {
-        min(4096, max(1024, count * 2 + 256))
+        min(8192, max(2048, count * 2 + 512))
     }
 
     private func finish(_ result: Result<String, Error>, completion: @escaping (Result<String, Error>) -> Void) {

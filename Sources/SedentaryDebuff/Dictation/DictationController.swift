@@ -35,10 +35,11 @@ final class DictationController: ObservableObject {
     private var lastError: String?
     /// 当前片段距最大切段的剩余秒数（5…1，进入预警窗口时非 nil；engineQueue 独占访问）。
     private var cutCountdown: Int?
-    /// 激活期间累积的待提交文本：只显示在光波下方，按提交键整段贴到当前光标后清空。
-    /// 每段转写是一个 block，带「是否已清整理」标记：清整理时把所有未整理的 block
-    /// 拉通拼在一起交给大模型处理，成功后合并回一个已整理 block，避免重复送模型。
-    private var bufferBlocks: [BufferBlock] = []
+    /// 激活期间累积的待提交文本（原始转写，段间直接拼接）：只显示在光波下方，按提交键
+    /// 整段贴到当前光标后清空。逐段不做任何大模型调用，只在提交/停止时对整段做一次清整理。
+    private var bufferText = ""
+    /// 本轮缓冲是否已完成「整段清整理」（成功或失败都算完成），避免重复送模型。
+    private var finalCleanupDone = false
     /// 清整理在途标记与请求令牌（令牌用于在停麦/清空后作废过期回调）。
     private var cleanupInFlight = false
     private var cleanupToken = 0
@@ -61,7 +62,7 @@ final class DictationController: ObservableObject {
     private var pasteBusy = false
     /// 引擎因输入/输出硬件变化（切换麦克风等）自行 stop 时回调，用于原地续麦。
     private var engineConfigChangeObserver: NSObjectProtocol?
-    /// 应用退出前还原系统默认输入设备（若录音期间被我们临时切走）。
+    /// 应用退出前停麦并解除系统静音。
     private var terminationObserver: NSObjectProtocol?
 
     // MARK: 引擎健康自愈
@@ -84,12 +85,16 @@ final class DictationController: ObservableObject {
     /// 监听中原地自愈（引擎未运行 / 运行但无数据）的连续失败上限，超过后停止监听避免空转。
     /// 互联设备（iPhone 麦克风）重新握手可能需要十几秒，故留出约 30 秒窗口。
     private static let maxRecoveryStreak = 10
-    /// 全新开启重试时，每隔多少次触发一次「重新选择麦克风」（切走默认输入再切回）。
-    private static let reconnectKickEveryBootAttempts = 5
     /// 健康检查周期。
     private static let healthCheckInterval: TimeInterval = 3
     /// 引擎运行后超过该时长仍收不到输入缓冲即判定僵死。
     private static let noBufferStallSeconds: TimeInterval = 6
+    /// 配置变化通知的合并/抑制窗口：窗口内的连发通知只处理最后一条。
+    private static let configChangeCooldown: TimeInterval = 1
+    /// 当前配置变化合并令牌：新通知使旧令牌作废，只保留最后一条延后处理。
+    private var configChangeToken = 0
+    /// 在此时刻之前忽略配置变化通知（抑制由自身 start/stop 触发的回声）。
+    private var configChangeSuppressUntil: Date?
 
     private let waveformData = DictationWaveformData()
     private let waveformPanel: DictationWaveformPanel
@@ -111,13 +116,6 @@ final class DictationController: ObservableObject {
     private struct CommandMatch {
         let command: VoiceCommand
         let body: String?
-    }
-
-    /// 缓冲里的一段文本：转写先以「未整理」入队，清整理成功后合并为「已整理」。
-    private struct BufferBlock {
-        let id: UUID
-        var text: String
-        var isCleaned: Bool
     }
 
     init(settings: DictationSettings) {
@@ -254,17 +252,15 @@ final class DictationController: ObservableObject {
         waveformPanel.setEmptyBufferBehavior(settings.emptyBufferBehavior)
     }
 
-    /// 菜单更改「清整理」配置后调用：刷新进度条两段式融合，并对尚未整理的缓冲补一次清整理。
+    /// 菜单更改「清整理」配置后调用：刷新进度条两段式融合。清整理只在提交/停止时整段执行，
+    /// 这里不再对在途缓冲补跑。
     func applyCleanupSettings() {
         waveformPanel.setCleanupFused(cleanupReady)
-        engineQueue.async { [weak self] in
-            self?.scheduleCleanupIfNeeded()
-        }
     }
 
     /// 菜单选择麦克风后调用：更新本次/下次会话要用的麦克风（nil = 跟随系统默认）。
-    /// 正在监听时原地重建重启引擎，让系统默认输入切到新选设备并立即生效；
-    /// 引擎未开时只记录目标，下次 start 时由 recorder 临时切换默认输入。
+    /// 正在监听时原地重建重启引擎，让系统默认输入切到新选设备并等其就绪后立即生效；
+    /// 引擎未开时只记录目标，下次 start 时由 recorder 切换并唤醒。
     func applyMicrophoneInput() {
         engineQueue.async { [weak self] in
             guard let self else { return }
@@ -278,7 +274,7 @@ final class DictationController: ObservableObject {
             self.recorder.resetBufferClock()
             do {
                 try self.recorder.start()
-                self.engineStartedAt = Date()
+                self.markEngineStarted()
                 self.waveformData.reset(sampleRate: self.recorder.sampleRate)
                 CrashLog.write("[\(Date())] 切换麦克风后已重启引擎 state=\(self.currentState)\n")
                 self.setStatus(self.currentState == .active ? "输入中…" : "待命（按 \(self.hotkeyLabel) 重新激活）")
@@ -321,7 +317,7 @@ final class DictationController: ObservableObject {
     /// 全新开启（从 off 启动，含解锁后恢复）：重置会话状态后启动引擎。
     /// 麦克风在锁屏/唤醒瞬间往往尚未就绪，start 可能抛错，这里交给自动退避重试自愈。
     private func beginRecording(mode: State = .active) {
-        // 本次会话要用的麦克风（nil = 跟随系统默认）；start 时 recorder 据此临时切换默认输入。
+        // 本次会话要用的麦克风（nil = 跟随系统默认）；start 时 recorder 据此切默认输入并唤醒。
         recorder.setInputDevice(uid: settings.microphoneUID)
         segmentSamples.removeAll()
         segmentStart = nil
@@ -362,17 +358,13 @@ final class DictationController: ObservableObject {
                 CrashLog.write("[\(Date())] 启动麦克风连续失败 \(autoBootAttempt) 次，放弃\n")
                 autoBootPending = false
                 autoBootAttempt = 0
-                // 收尾：停掉可能的残留路由，把系统默认输入还原。
+                // 收尾：停掉可能仍在运行的引擎。
                 recorder.stop()
                 setStatus("启动麦克风失败：\(error.localizedDescription)")
                 return
             }
-            // 所选互联设备（iPhone 麦克风等）掉线后常卡在「已列出但不可运行」，光靠重试
-            // start 永远得到 'stop' 错误：周期性把默认输入切走再切回，触发其重新连接。
-            if (autoBootAttempt - 1) % Self.reconnectKickEveryBootAttempts == 0,
-               recorder.reconnectSelectedInputDevice() {
-                CrashLog.write("[\(Date())] 启动失败：已触发所选麦克风重新连接\n")
-            }
+            // 所选设备（含 iPhone 麦克风等互联设备）掉线或未就绪时 start 会失败：重建引擎
+            // 后重试即可，start 会重新切默认输入并等待设备就绪。
             CrashLog.write("[\(Date())] 启动麦克风失败（第 \(autoBootAttempt) 次，稍后重试）：\(error.localizedDescription)\n")
             setStatus("启动麦克风失败，正在等待麦克风就绪自动重试…（\(autoBootAttempt)）")
             let delay = min(0.3 * pow(2.0, Double(autoBootAttempt - 1)), 4.0)
@@ -384,7 +376,7 @@ final class DictationController: ObservableObject {
         }
         autoBootPending = false
         autoBootAttempt = 0
-        engineStartedAt = Date()
+        markEngineStarted()
         let mode = autoBootMode
         CrashLog.write("[\(Date())] 引擎启动成功，进入 \(mode == .active ? "激活" : "非激活")\n")
         enterListeningState(mode)
@@ -450,6 +442,9 @@ final class DictationController: ObservableObject {
         startFailureStreak = 0
         engineStartedAt = nil
         shouldStartOnPermission = false
+        // 作废排队中的配置变化处理并解除抑制，避免残留状态影响下一轮。
+        configChangeToken += 1
+        configChangeSuppressUntil = nil
         recorder.resetBufferClock()
     }
 
@@ -485,7 +480,7 @@ final class DictationController: ObservableObject {
     /// 即使当前是 off（全新开启的自动重试仍在排队），也要先取消排队，避免锁屏期间悄悄开麦。
     private func stopForScreenLock() {
         resetEngineBookkeeping()
-        // 无论当前状态都停一次：释放可能残留的“切默认输入”路由，引擎未运行时 stop 是安全空操作。
+        // 无论当前状态都停一次：引擎未运行时 stop 是安全空操作。
         recorder.stop()
         guard currentState != .off else { return }
         CrashLog.write("[\(Date())] 锁屏：停止监听 state=\(currentState)\n")
@@ -598,16 +593,11 @@ final class DictationController: ObservableObject {
         return fixedOverhead + Double(max(0, characters)) * perCharacter
     }
 
-    /// 在途转写全部返回、且待整理文本都已清整理后执行提交（由 handleResult /
-    /// handleCleanupResult 在条件满足时调用）。
+    /// 在途转写全部返回后执行提交（由 handleResult / handleFinalCleanupResult 在条件
+    /// 满足时调用）。提交前对整段缓冲做一次清整理；若已发起请求则等其回调再来。
     private func tryFinishCommit() {
         guard commitRequested, pending == 0 else { return }
-        if cleanupPending {
-            scheduleCleanupIfNeeded()
-            if cleanupInFlight { return }
-            // 未配置或请求已结束仍有残留：放弃等待，直接按原文提交。
-            markAllBlocksCleaned()
-        }
+        guard !startFinalCleanupIfNeeded() else { return }
         finishCommit()
     }
 
@@ -620,6 +610,7 @@ final class DictationController: ObservableObject {
         // 取出并清空缓冲：整段文本先贴到当前光标，随后光波下方的文本区清空，
         // 避免提交后旧内容一直留在面板上。
         let text = takeBufferText()
+        if !text.isEmpty { journal.append(activeText: text) }
         let shouldSend = sendAfterCommit
         sendAfterCommit = false
         setState(.inactive)
@@ -642,12 +633,21 @@ final class DictationController: ObservableObject {
     // MARK: - 硬件变化（切换输入设备）与引擎健康自愈
 
     /// 输入/输出硬件变化（如切换麦克风、锁屏/唤醒）时引擎被系统自行 stop。
-    /// 先重建引擎，让 inputNode 丢弃旧设备的缓存格式、重新绑定当前硬件——
-    /// 否则用过期格式 installTap 会抛 NSException（format mismatch）崩溃。
-    /// 锁屏前的停麦（stopForScreenLock）会先置为 off，此处不会重复续麦。
-    /// 注意：设备重连后设备往往还没就绪，立即续麦可能 start 抛错或“开着却无数据”，
-    /// 失败不置 off，交由周期健康检查继续自愈，直到麦克风真正就绪、数据流入。
+    /// 互联设备（iPhone 麦克风）握手时系统会连发多条配置变化通知，逐条重建会
+    /// 互相触发形成风暴（引擎反复 start/stop，设备始终稳不下来、永远出不了电平）。
+    /// 这里先做合并防抖：冷却窗口内只处理最后一条，且忽略由我们自身 start/stop
+    /// 触发的通知，再重建引擎让 inputNode 丢弃旧设备格式、重新绑定当前硬件。
     private func handleEngineConfigurationChange() {
+        if let suppressUntil = configChangeSuppressUntil, Date() < suppressUntil { return }
+        configChangeToken += 1
+        let token = configChangeToken
+        engineQueue.asyncAfter(deadline: .now() + Self.configChangeCooldown) { [weak self] in
+            guard let self, token == self.configChangeToken else { return }
+            self.applyEngineConfigurationChange()
+        }
+    }
+
+    private func applyEngineConfigurationChange() {
         // 无论是否在监听都重建，保证下次 start() 用的是新硬件的格式。
         recorder.rebuildEngine()
         recorder.resetBufferClock()
@@ -658,7 +658,7 @@ final class DictationController: ObservableObject {
         vad.reset()
         do {
             try recorder.start()
-            engineStartedAt = Date()
+            markEngineStarted()
             waveformData.reset(sampleRate: recorder.sampleRate)
             CrashLog.write("[\(Date())] 输入设备变化后已续麦 state=\(currentState)\n")
         } catch {
@@ -666,6 +666,13 @@ final class DictationController: ObservableObject {
             CrashLog.write("[\(Date())] 输入设备变化后重启麦克风失败，等待自动恢复：\(error.localizedDescription)\n")
             setStatus("麦克风切换后正在自动恢复…")
         }
+    }
+
+    /// 引擎成功启动后记录时刻，并短暂忽略随后由本次启动自身触发的配置变化通知，
+    /// 避免「启动 → 通知 → 重建 → 再通知」的自激循环。
+    private func markEngineStarted() {
+        engineStartedAt = Date()
+        configChangeSuppressUntil = Date().addingTimeInterval(Self.configChangeCooldown)
     }
 
     /// 周期健康检查（engineQueue 上运行）：麦克风应开未开、或引擎僵死（开着却没
@@ -714,17 +721,12 @@ final class DictationController: ObservableObject {
         segmentSamples.removeAll()
         segmentStart = nil
         vad.reset()
-        // 先丢弃旧引擎（stop 并摘 tap），再触发重连切换，避免仍有引擎在跑时改动默认输入。
+        // 丢弃旧引擎（stop 并摘 tap）后重建，start() 会切默认输入并等所选设备真正就绪；
+        // 唤醒只做一次真实切换、不来回抖动，避免把互联设备（iPhone 麦克风）带进静音坏态。
         recorder.rebuildEngine()
-        // 所选互联设备（iPhone 麦克风等）掉线后会卡在「已列出但不可运行」，直接重建
-        // 重启只会反复拿到 coreaudio 'stop'：先把默认输入切走再切回，触发其重新握手。
-        if startFailureStreak == 1 || startFailureStreak % Self.reconnectKickEveryBootAttempts == 0,
-           recorder.reconnectSelectedInputDevice() {
-            CrashLog.write("[\(Date())] 已触发所选麦克风重新连接\n")
-        }
         do {
             try recorder.start()
-            engineStartedAt = Date()
+            markEngineStarted()
             waveformData.reset(sampleRate: recorder.sampleRate)
             CrashLog.write("[\(Date())] 原地重启成功 state=\(currentState)\n")
         } catch {
@@ -880,18 +882,10 @@ final class DictationController: ObservableObject {
 
     // MARK: - 转写结果
 
-    /// 清理转写文本首尾无意义的空白，但保留句尾用于段间分段的换行：
-    /// 服务端在每个转写结果末尾追加空行（"\n\n"），让连续几句粘贴后读成独立段落；
-    /// 若按旧的整段 trim 把句尾换行一并裁掉，句与句之间就会黏成一段。
-    private func cleanedTranscribedText(_ text: String) -> String {
-        let base = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !base.isEmpty else { return "" }
-        var trailingNewlines = 0
-        for character in text.reversed() {
-            guard character.isNewline else { break }
-            trailingNewlines += 1
-        }
-        return base + String(repeating: "\n", count: trailingNewlines)
+    /// 清理转写文本首尾空白。换行一律交给大模型处理，这里不再保留服务端追加的
+    /// 句尾空行，避免把本该连成一行的文字被段间换行打散。
+    private func trimmedTranscribedText(_ text: String) -> String {
+        text.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private func handleResult(_ result: Result<String, Error>, generation gen: Int) {
@@ -907,7 +901,7 @@ final class DictationController: ObservableObject {
         }
         switch result {
         case .success(let text):
-            let cleaned = cleanedTranscribedText(text)
+            let cleaned = trimmedTranscribedText(text)
             CrashLog.write("[\(Date())] 转写结果: 「\(cleaned)」 state=\(currentState)\n")
             if !cleaned.isEmpty {
                 handleTranscribed(cleaned)
@@ -921,8 +915,8 @@ final class DictationController: ObservableObject {
     }
 
     /// 按当前状态决定一段转写文本的去向：激活期间只累积到缓冲，提交时才整段上屏。
-    /// 日记不再在这里写：改为在「清整理完成后」写入整理后的文本（见 appendBuffer /
-    /// handleCleanupResult），保证语音日记记录的是大模型整理后的内容。
+    /// 语音日记不在这里写：改为提交/停止落盘时写入最终文本（见 finishCommit /
+    /// finishIfNeeded），保证记录的是整段清整理后的内容。
     private func handleTranscribed(_ text: String) {
         switch currentState {
         case .active, .inactive:
@@ -948,37 +942,35 @@ final class DictationController: ObservableObject {
 
     // MARK: - 缓冲
 
-    /// 追加一段转写文本到面板缓冲（同段落内的换行保留，首尾空行裁掉）。
-    /// 未启用/未配置清整理时直接标记为已整理并立即写入日记（原文）；否则记为待整理，
-    /// 等清整理返回后在 handleCleanupResult 里按整理后的文本写日记。
+    /// 追加一段转写文本到面板缓冲（首尾空白裁掉；换行由大模型在提交整理时决定，段间不自动
+    /// 加换行）。这里不触发任何大模型调用：清整理只在整个缓冲提交/停止时做一次。
     private func appendBuffer(_ text: String) {
-        let line = text.trimmingCharacters(in: .newlines)
+        let line = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !line.isEmpty else { return }
-        let alreadyCleaned = !cleanupReady
-        bufferBlocks.append(BufferBlock(id: UUID(), text: line, isCleaned: alreadyCleaned))
-        if alreadyCleaned {
-            journal.append(activeText: line)
-        }
+        bufferText += line
         updateBufferUI()
-        scheduleCleanupIfNeeded()
     }
 
-    /// 取出并清空缓冲文本：各段以换行拼接后整段粘贴，保持逐句成行。
+    /// 取出并清空缓冲文本：各段直接拼接后整段粘贴。段间不插入换行——换行完全由
+    /// 大模型在整理结果里给出，避免把本该连成一行的文字按语音段切开。
     private func takeBufferText() -> String {
-        let text = bufferBlocks.map(\.text).filter { !$0.isEmpty }.joined(separator: "\n")
+        let text = bufferText
         clearBuffer()
         return text
     }
 
     private func clearBuffer() {
-        bufferBlocks.removeAll()
+        bufferText = ""
+        finalCleanupDone = false
         // 缓冲已清空：作废在途清整理，避免过期结果落回新缓冲。
         resetCleanupBookkeeping()
         updateBufferUI()
     }
 
+    /// 把缓冲文本交给面板展示（整段一个元素，面板里出现的换行完全来自大模型整理结果本身，
+    /// 与提交时粘贴的内容保持一致）。
     private func updateBufferUI() {
-        let lines = bufferBlocks.map(\.text)
+        let lines = bufferText.isEmpty ? [] : [bufferText]
         DispatchQueue.main.async { [weak self] in
             self?.waveformPanel.setBuffer(lines)
         }
@@ -991,16 +983,6 @@ final class DictationController: ObservableObject {
         settings.cleanupEnabled && !settings.cleanupAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
-    /// 是否还有未整理的缓冲文本。
-    private var hasUncleanedBlocks: Bool {
-        bufferBlocks.contains { !$0.isCleaned }
-    }
-
-    /// 是否仍在等待清整理落地（提交/停止时需等待，保证粘贴出去的是整理后的文本）。
-    private var cleanupPending: Bool {
-        cleanupReady && (cleanupInFlight || hasUncleanedBlocks)
-    }
-
     private func cleanupConfiguration() -> DictationCleaner.Configuration {
         DictationCleaner.Configuration(
             urlString: settings.cleanupURLString,
@@ -1010,91 +992,69 @@ final class DictationController: ObservableObject {
         )
     }
 
-    /// 待整理文本之外，额外带给大模型的「上文」字符上限（注意是字符，不是 token）。
-    /// 只取已整理前文的最后 500 个字，足以理解被切断处的语境，又不会让成本随会话变长而膨胀。
-    private static let cleanupContextCharacterLimit = 500
+    /// 提交/停止时对整段缓冲做一次清整理（不再逐段，也不再带 500 字上文）。返回 true 表示
+    /// 已发起请求、需要等回调；false 表示无需整理（未启用/缓冲为空/已完成），可直接提交。
+    @discardableResult
+    private func startFinalCleanupIfNeeded() -> Bool {
+        guard cleanupReady, !bufferText.isEmpty, !finalCleanupDone else { return false }
+        guard !cleanupInFlight else { return true }
 
-    /// 带上下文地整理尚未处理的 block：把已整理的前文（截取最后 500 字）作为【上文】
-    /// 一并送出，让被切断的新段能借助语境纠正；返回后只替换这批未整理的 block，前文不动。
-    /// 请求在途时新到的段落留到下一轮一起带上。
-    private func scheduleCleanupIfNeeded() {
-        guard cleanupReady, !cleanupInFlight else { return }
-        let dirty = bufferBlocks.filter { !$0.isCleaned }
-        guard !dirty.isEmpty else { return }
-
-        let context = Self.cleanupContext(
-            from: bufferBlocks.filter { $0.isCleaned }.map(\.text)
-        )
-        let ids = dirty.map(\.id)
-        let joined = dirty.map(\.text).joined(separator: "\n")
+        let text = bufferText
         cleanupToken += 1
         let token = cleanupToken
         cleanupInFlight = true
-        setCleaning(true, estimatedDuration: Self.estimatedCleanSeconds(characters: joined.count + context.count))
+        setCleaning(true, estimatedDuration: Self.estimatedCleanSeconds(characters: text.count))
         let gen = generation
-        cleaner.clean(text: joined, context: context, configuration: cleanupConfiguration()) { [weak self] result in
+        cleaner.clean(text: text, context: "", configuration: cleanupConfiguration()) { [weak self] result in
             guard let self else { return }
             self.engineQueue.async {
-                self.handleCleanupResult(result, originalText: joined, ids: ids, generation: gen, token: token)
+                self.handleFinalCleanupResult(result, originalText: text, generation: gen, token: token)
             }
         }
+        return true
     }
 
-    /// 取已整理前文的最后若干**字符**作为上文（按字符计数，非 token）。
-    private static func cleanupContext(from cleanedTexts: [String]) -> String {
-        guard !cleanedTexts.isEmpty else { return "" }
-        let joined = cleanedTexts.joined(separator: "\n")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !joined.isEmpty else { return "" }
-        if joined.count <= cleanupContextCharacterLimit { return joined }
-        return String(joined.suffix(cleanupContextCharacterLimit))
-    }
-
-    /// 清整理返回：成功后用整理文本替换被送整理的那批 block，失败则保留原文并标记，
-    /// 避免同一段文本反复重试；随后补跑在途期间新到的未整理 block，并推进提交流程。
-    /// 语音日记在这里写入——记录的是最终落进缓冲的那份文本（整理后，或保留的原文）；
-    /// 若这批 block 在返回前已被清空/丢弃，则不再写日记。
-    private func handleCleanupResult(
+    /// 整段清整理返回：成功则用整理文本整体覆盖缓冲，失败或疑似非改写则保留原文；随后继续
+    /// 推进提交或收尾。过期结果（令牌/代数不符）直接丢弃，不改动缓冲，也不动当前 loading。
+    private func handleFinalCleanupResult(
         _ result: Result<String, Error>,
         originalText: String,
-        ids: [UUID],
         generation gen: Int,
         token: Int
     ) {
-        if token == cleanupToken {
-            cleanupInFlight = false
+        guard token == cleanupToken else {
+            CrashLog.write("[\(Date())] 丢弃过期清整理结果（token \(token) != \(cleanupToken)）\n")
+            return
         }
+        cleanupInFlight = false
         setCleaning(false)
         guard gen == generation else {
             CrashLog.write("[\(Date())] 丢弃过期清整理结果（gen \(gen) != \(generation)）\n")
             return
         }
-        // 该批次是否仍留在缓冲（未被「清空/Home」等丢弃）。
-        let idSet = Set(ids)
-        let batchExists = bufferBlocks.contains { idSet.contains($0.id) }
+        // 结果返回前缓冲可能已被清空或改写：只在原文原样还在时才应用，避免落到新缓冲。
+        guard !finalCleanupDone, bufferText == originalText else {
+            tryFinishCommit()
+            finishIfNeeded()
+            return
+        }
+        finalCleanupDone = true
         switch result {
         case .success(let cleaned):
             let value = cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
             if value.isEmpty || Self.looksLikeNonRewrite(original: originalText, cleaned: value) {
-                // 模型没在整理（例如把「修改」当成指令反问用户），保留原始转写，绝不把
-                // 这类内容替换进缓冲。
+                // 模型没在整理（例如把「修改」当成指令反问用户），保留原始转写，绝不替换缓冲。
                 if !value.isEmpty {
                     CrashLog.write("[\(Date())] 清整理疑似非改写，保留原文：「\(value)」\n")
                 }
-                markBlocksCleaned(ids)
-                if batchExists { journal.append(activeText: originalText) }
             } else {
-                replaceBlocks(ids, with: value)
-                if batchExists { journal.append(activeText: value) }
+                bufferText = value
             }
         case .failure(let error):
             CrashLog.write("[\(Date())] 清整理失败：\(error.localizedDescription)\n")
             setStatus("清整理失败，已保留原文：\(error.localizedDescription)")
-            markBlocksCleaned(ids)
-            if batchExists { journal.append(activeText: originalText) }
         }
         updateBufferUI()
-        scheduleCleanupIfNeeded()
         tryFinishCommit()
         finishIfNeeded()
     }
@@ -1114,66 +1074,13 @@ final class DictationController: ObservableObject {
         return false
     }
 
-    /// 用整理后的文本替换被送整理的那批 block（合并为一个已整理 block）。
-    /// 断句续写优化：这批新段紧跟在已整理前文之后，且前文没有句末标点时，说明上一句
-    /// 被 ASR 切断了——把整理结果直接续写到前文末尾（不换行），避免句子中间多出换行。
-    private func replaceBlocks(_ ids: [UUID], with text: String) {
-        let idSet = Set(ids)
-        guard let insertAt = bufferBlocks.firstIndex(where: { idSet.contains($0.id) }) else { return }
-
-        if insertAt > 0,
-           !text.contains("\n"),
-           !Self.startsWithListMarker(text),
-           bufferBlocks[insertAt - 1].isCleaned,
-           !Self.hasTerminalPunctuation(bufferBlocks[insertAt - 1].text) {
-            bufferBlocks[insertAt - 1].text += text
-            bufferBlocks.removeAll { idSet.contains($0.id) }
-            return
-        }
-
-        bufferBlocks.removeAll { idSet.contains($0.id) }
-        let index = min(insertAt, bufferBlocks.count)
-        bufferBlocks.insert(BufferBlock(id: UUID(), text: text, isCleaned: true), at: index)
-    }
-
-    /// 文本是否以句末/分句标点结尾（用于判断上一句是否已经说完）。
-    private static func hasTerminalPunctuation(_ text: String) -> Bool {
-        guard let last = text.last else { return false }
-        return "。！？!?；;：:…".contains(last)
-    }
-
-    /// 整理结果是否以列表标记开头（如「1.」「1、」「- 」「•」）；是则不并入上一段。
-    private static func startsWithListMarker(_ text: String) -> Bool {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let first = trimmed.first else { return false }
-        if first == "-" || first == "*" || first == "•" || first == "·" { return true }
-        var index = trimmed.startIndex
-        var digits = 0
-        while index < trimmed.endIndex, trimmed[index].isNumber {
-            digits += 1
-            index = trimmed.index(after: index)
-        }
-        guard digits > 0, index < trimmed.endIndex else { return false }
-        return [".", "、", ")", "）", "．"].contains(trimmed[index])
-    }
-
-    private func markBlocksCleaned(_ ids: [UUID]) {
-        let idSet = Set(ids)
-        for index in bufferBlocks.indices where idSet.contains(bufferBlocks[index].id) {
-            bufferBlocks[index].isCleaned = true
-        }
-    }
-
-    private func markAllBlocksCleaned() {
-        for index in bufferBlocks.indices {
-            bufferBlocks[index].isCleaned = true
-        }
-    }
-
     /// 作废在途清整理请求（停麦/提交/清空缓冲时调用），避免过期回调改动新会话缓冲。
     private func resetCleanupBookkeeping() {
         cleanupToken += 1
         cleanupInFlight = false
+        // 作废清整理的同时收起它的 loading：否则被丢弃的在途结果不会再回调关它，
+        // 「清空/提交/停麦」后会一直停在「转译中」。
+        setCleaning(false)
     }
 
     /// 语音指令识别：整段转写文本去掉首尾空白、标点并忽略大小写后，恰好等于某个指令词。
@@ -1232,8 +1139,11 @@ final class DictationController: ObservableObject {
 
     /// 识别到「清空/clear」指令：清空 debuff 缓冲区里尚未提交的文本，继续输入。
     private func performClearCommand() {
-        CrashLog.write("[\(Date())] 指令：清空 → 清空缓冲区 blocks=\(bufferBlocks.count) state=\(currentState)\n")
+        CrashLog.write("[\(Date())] 指令：清空 → 清空缓冲区 len=\(bufferText.count) state=\(currentState)\n")
         clearBuffer()
+        // 若此前已请求提交（如说完「over/发送」又说了「清空」），缓冲清空后要立即推进提交，
+        // 否则会停在等待清整理/提交的状态上，再按快捷键也会被 commitRequested 挡住。
+        tryFinishCommit()
     }
 
     /// 识别到「删除/撤销」指令：在当前焦点按一次 ⌥⌫ 删除一个词，继续输入。
@@ -1274,14 +1184,11 @@ final class DictationController: ObservableObject {
 
     private func finishIfNeeded() {
         guard isFlushing, pending == 0 else { return }
-        if cleanupPending {
-            scheduleCleanupIfNeeded()
-            if cleanupInFlight { return }
-            // 未配置或请求已结束仍有残留：放弃等待，直接按原文落盘。
-            markAllBlocksCleaned()
-        }
-        // 停止引擎时，把缓冲里还没提交的内容整段落盘，避免没按键就停麦导致白说。
+        // 停止引擎时同样先对整段缓冲做一次清整理；请求在途则等回调再来。
+        guard !startFinalCleanupIfNeeded() else { return }
+        // 把缓冲里还没提交的内容整段落盘，避免没按键就停麦导致白说。
         let text = takeBufferText()
+        if !text.isEmpty { journal.append(activeText: text) }
         isFlushing = false
         resetCleanupBookkeeping()
         setState(.off)

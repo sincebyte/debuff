@@ -35,7 +35,8 @@ final class DictationWaveformViewState: ObservableObject {
     var showsLoading: Bool { isTranscribing || isCleaning }
     @Published var activeOpacity: Double = 1.0
 
-    /// 缓冲文本：激活期间逐段累积，提交时整段粘贴到当前光标后清空。
+    /// 缓冲文本：激活期间累积，提交时整段粘贴到当前光标后清空。内容为拼接后的整段文本
+    /// （换行由大模型决定），通常只有一个元素，供滚动区展示与自动滚底。
     @Published var bufferLines: [String] = []
     /// 缓冲非空时在光波下方展开滚动文本区。
     @Published var showsBuffer = false

@@ -7,9 +7,9 @@ struct DictationMicrophoneInfo: Equatable {
     let name: String
 }
 
-/// macOS 的 AVAudioEngine 只能采「系统默认输入设备」，没有给单个应用指定麦克风的 API。
-/// 因此“选择麦克风”在实现上是：录音期间用 CoreAudio 把系统默认输入设备切到所选麦克风，
-/// 停止录音/锁屏/退出时再还原。这里封装所有 CoreAudio HAL 的读写，不持有任何状态。
+/// CoreAudio HAL 读写封装：枚举输入设备、按 uid 查设备 ID / 显示名 / 运行状态，
+/// 以及切换系统默认输入设备。iPhone 等互联设备只有成为系统默认输入才会被系统
+/// 唤醒，因此「选择麦克风」仍需在录音期间接管系统默认输入（见 DictationAudioRecorder）。
 enum DictationMicrophone {
     /// 当前所有可作为输入来源的设备（过滤掉系统隐藏项）。
     static func availableInputDevices() -> [DictationMicrophoneInfo] {
@@ -21,6 +21,12 @@ enum DictationMicrophone {
             result.append(DictationMicrophoneInfo(uid: uid, name: name))
         }
         return result
+    }
+
+    /// 按 uid 查当前在线输入设备的 AudioDeviceID（设备不在线或不是输入设备时返回 nil）。
+    static func inputDeviceID(forUID uid: String) -> AudioDeviceID? {
+        guard let devices = deviceIDs() else { return nil }
+        return devices.first { deviceUID($0) == uid && isInputDevice($0) && isAlive($0) }
     }
 
     /// 当前系统默认输入设备的 uid。
@@ -40,20 +46,15 @@ enum DictationMicrophone {
         availableInputDevices().first { $0.uid == uid }?.name
     }
 
-    /// 选一支用于「过渡切换」的输入设备 uid：优先用 preferred（若它可用且不等于
-    /// excluding），否则任取一支其它在线输入。用于把系统默认输入临时切走再切回，
-    /// 以触发互联设备重新握手。找不到可用的过渡设备时返回 nil。
-    static func inputUIDPreferring(_ preferred: String?, excluding uid: String) -> String? {
-        let devices = availableInputDevices()
-        if let preferred, preferred != uid, devices.contains(where: { $0.uid == preferred }) {
-            return preferred
-        }
-        return devices.first { $0.uid != uid }?.uid
+    /// 指定 uid 的输入设备是否正在运行（已真正开始出流）。
+    static func isInputRunning(forUID uid: String) -> Bool {
+        guard let device = inputDeviceID(forUID: uid) else { return false }
+        return uint32Property(of: device, selector: kAudioDevicePropertyDeviceIsRunning) == 1
     }
 
     /// 把系统默认输入设备切到指定 uid 的设备。失败（设备不在线等）返回 false。
     static func setDefaultInputDevice(uid: String) -> Bool {
-        guard let target = deviceIDs()?.first(where: { deviceUID($0) == uid }) else { return false }
+        guard let target = inputDeviceID(forUID: uid) else { return false }
         var deviceID = target
         var address = AudioObjectPropertyAddress(
             mSelector: kAudioHardwarePropertyDefaultInputDevice,
@@ -65,6 +66,12 @@ enum DictationMicrophone {
             UInt32(MemoryLayout<AudioDeviceID>.size), &deviceID
         )
         return status == noErr
+    }
+
+    /// 显式启动指定设备（互联设备卡在「已列出但未运行」时用于促成启动）。
+    static func startInputDevice(uid: String) -> Bool {
+        guard let device = inputDeviceID(forUID: uid) else { return false }
+        return AudioDeviceStart(device, nil) == noErr
     }
 
     // MARK: - CoreAudio 底层读取

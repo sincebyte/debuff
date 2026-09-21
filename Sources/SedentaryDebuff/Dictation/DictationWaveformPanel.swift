@@ -42,6 +42,15 @@ final class DictationWaveformPanel {
 
     private var currentWidth: CGFloat = waveformDefaultWidth
 
+    /// 收起/展开动画时长（秒）。
+    private let revealDuration: TimeInterval = 0.22
+    /// 当前是否处于展开态。展开时宽度为 currentWidth，收起时宽度收到 0（右缘保持不动）。
+    private var isExpanded = false
+    /// 展开/收起动画进行中：抑制窗口移动/缩放写回设置与位置，避免把动画中间帧持久化。
+    private var isRevealAnimating = false
+    /// 展开/收起代号：快速反复切换时作废旧动画的完成回调（否则旧的收起回调会误把面板 orderOut）。
+    private var revealGeneration = 0
+
     init(data: DictationWaveformData) {
         self.data = data
     }
@@ -50,11 +59,14 @@ final class DictationWaveformPanel {
         ensurePanel()
         guard let panel else { return }
         restorePosition(panel)
-        panel.orderFrontRegardless()
+        // 按当前状态落到展开/收起：右缘为锚点，收起态宽度为 0，展开时再由 0 推到 currentWidth。
+        applyReveal(animated: false)
+        if isExpanded { panel.orderFrontRegardless() }
     }
 
     func setActive(_ active: Bool) {
         viewState.isActive = active
+        applyReveal(animated: true)
     }
 
     func setListening(_ listening: Bool) {
@@ -70,6 +82,7 @@ final class DictationWaveformPanel {
                 : estimatedDuration
         }
         viewState.isTranscribing = transcribing
+        applyReveal(animated: true)
     }
 
     /// 清整理（第二阶段）进行中：进度条接着转译阶段继续推进，文案切换为「整理中」。
@@ -80,6 +93,57 @@ final class DictationWaveformPanel {
                 : estimatedDuration
         }
         viewState.isCleaning = cleaning
+        applyReveal(animated: true)
+    }
+
+    /// 展开条件：激活中，或正在转写/清整理（收尾段的进度条也要看得见）。
+    /// 其余（非激活待命）把整块宽度收向 0，右缘为锚点。
+    private var shouldReveal: Bool {
+        viewState.isActive || viewState.showsLoading
+    }
+
+    /// 按展开条件调整面板宽度：收起时把宽度收向 0（右缘不动），展开时从 0 推回 currentWidth。
+    /// `animated` 为 false 时直接落到目标宽度（用于首次显示，避免开场闪动）。
+    private func applyReveal(animated: Bool) {
+        let expanded = shouldReveal
+        guard let panel else {
+            isExpanded = expanded
+            return
+        }
+        let stateChanged = expanded != isExpanded
+        isExpanded = expanded
+        panel.ignoresMouseEvents = !expanded
+
+        // 右缘固定：无论收起还是展开，都让 maxX 保持在当前值。
+        let right = panel.frame.maxX
+        var target = panel.frame
+        target.size.width = expanded ? currentWidth : 0
+        target.origin.x = right - target.size.width
+
+        guard animated && stateChanged else {
+            // 动画进行中不要再插入同步 setFrame，否则会打断正在跑的收起/展开。
+            guard !isRevealAnimating else { return }
+            revealGeneration += 1
+            panel.setFrame(target, display: true)
+            if !expanded { panel.orderOut(nil) }
+            return
+        }
+
+        revealGeneration += 1
+        let generation = revealGeneration
+        isRevealAnimating = true
+        if expanded { panel.orderFrontRegardless() }
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = revealDuration
+            // 展开用 easeOut 快速推出、收起用 easeIn 加速收进，观感更像抽屉。
+            context.timingFunction = CAMediaTimingFunction(name: expanded ? .easeOut : .easeIn)
+            panel.animator().setFrame(target, display: true)
+        } completionHandler: { [weak self] in
+            guard let self, generation == self.revealGeneration else { return }
+            self.isRevealAnimating = false
+            // 完全收起后把窗口移出屏幕，避免 0 宽窗口残留。
+            if !expanded { panel.orderOut(nil) }
+        }
     }
 
     /// 是否启用「转译 → 清整理」两段式进度融合。
@@ -98,7 +162,8 @@ final class DictationWaveformPanel {
 
     func setWidth(_ width: CGFloat) {
         currentWidth = min(waveformMaxWidth, max(waveformMinWidth, width))
-        guard let panel else { return }
+        // 收起态只记录目标宽度，等展开时再生效，避免把 0 宽窗口撑开。
+        guard let panel, isExpanded else { return }
         var frame = panel.frame
         frame.size.width = currentWidth
         panel.setFrame(frame, display: true)
@@ -136,6 +201,8 @@ final class DictationWaveformPanel {
 
     private func ensurePanel() {
         guard panel == nil else { return }
+        // 首帧落在展开态尺寸，随后由 show() 的 applyReveal(animated: false) 落到目标态，
+        // 非激活时直接以 0 宽出现，避免先展开再收起的闪动。
         let size = NSSize(width: currentWidth, height: waveformPanelFullHeight)
         let host = PassThroughHostingView(
             rootView: DictationWaveformView(
@@ -161,9 +228,13 @@ final class DictationWaveformPanel {
         panel.hasShadow = false
         panel.isMovable = true
         panel.ignoresMouseEvents = false
+        // 收起态要把宽度收到 0，显式放开窗口最小尺寸，避免被系统下限卡住。
+        panel.minSize = .zero
+        panel.contentMinSize = .zero
         panel.contentView = content
         panel.setContentSize(size)
         self.panel = panel
+        applyReveal(animated: false)
 
         moveObserver = NotificationCenter.default.addObserver(
             forName: NSWindow.didMoveNotification,
@@ -178,8 +249,10 @@ final class DictationWaveformPanel {
             object: panel,
             queue: .main
         ) { [weak self] notification in
-            guard let window = notification.object as? NSWindow else { return }
-            self?.onWidthChange?(window.frame.width)
+            guard let self, let window = notification.object as? NSWindow else { return }
+            // 收起/展开动画与收起态（宽度 0）不写回设置，只有用户拖拽或展开态尺寸算数。
+            guard !self.isRevealAnimating, self.isExpanded else { return }
+            self.onWidthChange?(window.frame.width)
         }
         updatePanelHeight()
     }
@@ -187,6 +260,8 @@ final class DictationWaveformPanel {
     private func restorePosition(_ panel: NSPanel) {
         let defaults = UserDefaults.standard
         var frame = panel.frame
+        // 上一次可能停在收起态（宽度 0）：先按展开宽度算位置，再由 applyReveal 落到目标态。
+        frame.size.width = currentWidth
         var origin: NSPoint
         if defaults.object(forKey: Persistence.xKey) != nil,
            defaults.object(forKey: Persistence.yKey) != nil {
@@ -212,8 +287,11 @@ final class DictationWaveformPanel {
     }
 
     private func persistOrigin(from window: NSWindow) {
+        guard !isRevealAnimating else { return }
         let defaults = UserDefaults.standard
-        defaults.set(window.frame.origin.x, forKey: Persistence.xKey)
+        // 收起态窗口左缘贴在右缘：写回展开态左缘，避免重启后整块面板整体右移。
+        let originX = isExpanded ? window.frame.origin.x : window.frame.maxX - currentWidth
+        defaults.set(originX, forKey: Persistence.xKey)
         defaults.set(window.frame.origin.y, forKey: Persistence.yKey)
     }
 }
