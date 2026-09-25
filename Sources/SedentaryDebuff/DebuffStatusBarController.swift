@@ -203,7 +203,7 @@ final class DebuffStatusBarController: NSObject, NSMenuDelegate {
         itemJournalTodayText.toolTip = "今日激活语音转写的字符数（跨自然日自动清零重计）。"
         rootMenu.addItem(itemJournalTodayText)
         itemJournalSavedTime = makeDisabled("")
-        itemJournalSavedTime.toolTip = "按 \(Int(VoiceJournalStats.charsPerMinute)) 字/分钟的打字速度估算：转写 N 字 ≈ 节约 N/\(Int(VoiceJournalStats.charsPerMinute)) 分钟，历史语音输入折算的节约时间永久累计。"
+        itemJournalSavedTime.toolTip = "按 \(Int(VoiceJournalStats.charsPerMinute)) 字/分钟的打字速度估算：转写 N 字 ≈ 节约 N/\(Int(VoiceJournalStats.charsPerMinute)) 分钟，历史语音输入折算的节约时间永久累计（满 \(VoiceJournalStats.workdayMinutes / 60) 小时记为 1 天）。"
         rootMenu.addItem(itemJournalSavedTime)
 
         let settingsMenu = NSMenu()

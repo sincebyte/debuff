@@ -9,6 +9,9 @@ enum VoiceJournalStats {
     /// 估算打字速度（字/分钟）：转写 N 字 ≈ 节约 N / 100 分钟。
     static let charsPerMinute = 100.0
 
+    /// 一个「工作日」按 8 小时计：累计节约时间满 8 小时记为 1 天。
+    static let workdayMinutes = 8 * 60
+
     struct Snapshot {
         let todayChars: Int
         let totalChars: Int
@@ -53,11 +56,12 @@ enum VoiceJournalStats {
 
     /// 「累计节约时间」文案：不足 1 分钟显示秒，达到分钟显示分钟，达到小时显示小时，
     /// 达到天显示天（取最大两级时间单位，避免堆出一长串数字）。
+    /// 一天按 8 小时「工作日」折算，而不是 24 小时自然日。
     static func savedTimeText(totalChars: Int) -> String {
         let seconds = Int((Double(totalChars) * 60.0 / charsPerMinute).rounded())
         if seconds < 60 { return "\(seconds) 秒" }
         let totalMinutes = seconds / 60
-        let minutesInDay = 60 * 24
+        let minutesInDay = workdayMinutes
         let days = totalMinutes / minutesInDay
         let hours = (totalMinutes % minutesInDay) / 60
         let minutes = totalMinutes % 60
