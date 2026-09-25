@@ -623,6 +623,9 @@ final class DebuffStatusBarController: NSObject, NSMenuDelegate {
     }
 
     @objc private func quit() {
+        // 先停麦并还原系统静音（在引擎队列上串行完成），再退出；否则主线程直接停引擎
+        // 可能与队列中正在进行的 start/rebuild 竞争，导致退出时整个 App 卡死。
+        services.dictation.prepareForTermination()
         NSApp.terminate(nil)
     }
 

@@ -48,6 +48,9 @@ final class DictationController: ObservableObject {
     /// 语音「发送」提交后是否补一次回车。
     private var sendAfterCommit = false
     private var awaitingPermission = false
+    /// 启动在途（权限请求 / 自动重试）时，最终要进入的模式。用户此时按切换键会把
+    /// 它改写为激活，避免这次按键被 requestStart 的「启动在途」守卫直接吞掉。
+    private var awaitingStartMode: State = .active
     /// 权限弹窗期间是否仍期望开启（锁屏/停止会清掉，避免授权回来后在锁屏时悄悄开麦）。
     private var shouldStartOnPermission = false
     /// 引擎代数：每启动一次监听自增，过期转写结果按代数丢弃，避免跨会话串扰。
@@ -55,6 +58,8 @@ final class DictationController: ObservableObject {
     /// 锁屏时若在监听，记录解锁后要恢复的模式。
     private var shouldRestoreAfterUnlock = false
     private var restoreModeOnUnlock: State = .inactive
+    /// 锁屏前已触发「提交」、等其在途转写落地后停麦的标记。
+    private var pendingLockStop = false
     /// 是否已由本控制器把系统静音（离开激活时据此解除静音）。
     private var didMuteSystemAudio = false
 
@@ -91,6 +96,8 @@ final class DictationController: ObservableObject {
     private static let noBufferStallSeconds: TimeInterval = 6
     /// 配置变化通知的合并/抑制窗口：窗口内的连发通知只处理最后一条。
     private static let configChangeCooldown: TimeInterval = 1
+    /// 锁屏提交的兜底超时：在途转写/清整理超过该时长仍未落地就强制停麦。
+    private static let lockCommitTimeout: TimeInterval = 20
     /// 当前配置变化合并令牌：新通知使旧令牌作废，只保留最后一条延后处理。
     private var configChangeToken = 0
     /// 在此时刻之前忽略配置变化通知（抑制由自身 start/stop 触发的回声）。
@@ -142,8 +149,12 @@ final class DictationController: ObservableObject {
             object: nil,
             queue: nil
         ) { [weak self] _ in
-            self?.restoreSystemMute()
-            self?.recorder.stop()
+            // 引擎生命周期一律在 engineQueue 上串行执行：退出时也丢到该队列，避免与
+            // 进行中的 start/rebuild 并发操作 AVAudioEngine，导致主线程在退出时卡死。
+            self?.engineQueue.async {
+                self?.restoreSystemMute()
+                self?.recorder.stop()
+            }
         }
         applyHotkey()
         waveformPanel.setActiveOpacity(settings.activeOpacity)
@@ -223,7 +234,15 @@ final class DictationController: ObservableObject {
             guard let self else { return }
             switch self.currentState {
             case .off:
-                self.requestStart()
+                // 启动/权限在途时，此前这里调 requestStart 会被 awaitingPermission 守卫
+                // 直接吞掉，表现为「按了切换键却没有出现波形」。此时把这次按键的意图记为
+                // 激活，等启动完成后直接进入激活（自动重试也会读取 autoBootMode）。
+                if self.awaitingPermission || self.autoBootPending {
+                    self.awaitingStartMode = .active
+                    self.autoBootMode = .active
+                } else {
+                    self.requestStart()
+                }
             case .active:
                 self.requestCommit()
             case .inactive:
@@ -287,6 +306,9 @@ final class DictationController: ObservableObject {
     }
 
     private func requestStart(initialMode: State = .active) {
+        // 先记录目标模式：即使此刻已有启动在途（守卫会 return），这次调用的意图也要生效，
+        // 这样解锁恢复与用户按键不会互相吞掉。
+        awaitingStartMode = initialMode
         guard currentState == .off, !awaitingPermission else { return }
         guard DictationPasteBoard.isAccessibilityTrusted else {
             setStatus("需辅助功能授权才能使用语音输入")
@@ -305,7 +327,7 @@ final class DictationController: ObservableObject {
                     // 若期间已锁屏/已停止，此处应放弃开启，避免在锁屏状态下开麦。
                     guard self.shouldStartOnPermission else { return }
                     self.shouldStartOnPermission = false
-                    self.beginRecording(mode: initialMode)
+                    self.beginRecording(mode: self.awaitingStartMode)
                 } else {
                     self.shouldStartOnPermission = false
                     self.setStatus("未授权麦克风，请在系统设置中允许")
@@ -450,7 +472,8 @@ final class DictationController: ObservableObject {
 
     // MARK: - 锁屏 / 解锁
 
-    /// 锁屏：若正在监听，关停麦克风并记录解锁后要恢复的模式。
+    /// 锁屏：若正在监听，先把尚未提交的激活语音按一次切换快捷键「提交」落盘
+    /// （语音日记 + 尝试粘贴），等所有在途转写落地后再停麦；没有待提交内容则直接停麦。
     func handleScreenLock() {
         engineQueue.async { [weak self] in
             guard let self else { return }
@@ -460,7 +483,42 @@ final class DictationController: ObservableObject {
             } else {
                 self.shouldRestoreAfterUnlock = false
             }
-            self.stopForScreenLock()
+            self.commitBeforeLockStop()
+        }
+    }
+
+    /// 锁屏收尾：等价于按一次切换快捷键（激活 → 非激活）。有未落盘内容时走完整提交流程
+    /// ——强制收尾当前段、等在途转写与清整理落地、整段写入语音日记并尝试粘贴——落地后
+    /// 再由 finishCommit 触发停麦（pendingLockStop）；否则立即停麦。这样合盖/锁屏时不会
+    /// 把刚转写的内容整段丢掉。
+    private func commitBeforeLockStop() {
+        switch currentState {
+        case .off:
+            stopForScreenLock()
+        case .flushing:
+            // 已在停止收尾/上屏流程中：让它跑完（会整段落盘并粘贴），麦克风也已停，不再干预。
+            CrashLog.write("[\(Date())] 锁屏：收尾转写中，等其自然结束\n")
+        case .active, .inactive:
+            let needsCommit = currentState == .active || !bufferText.isEmpty || commitRequested
+            guard needsCommit else {
+                stopForScreenLock()
+                return
+            }
+            pendingLockStop = true
+            if commitRequested {
+                // 已有提交在途：等其 finishCommit 收尾时统一停麦。
+                CrashLog.write("[\(Date())] 锁屏：提交已在途，等其落地后停麦\n")
+                return
+            }
+            CrashLog.write("[\(Date())] 锁屏：先提交未落盘的转写 state=\(currentState)\n")
+            requestCommit()
+            // 兜底：在途转写/清整理若长时间不返回（网络异常），到时也强制停麦，避免挂着一路开着麦克风。
+            engineQueue.asyncAfter(deadline: .now() + Self.lockCommitTimeout) { [weak self] in
+                guard let self, self.pendingLockStop else { return }
+                CrashLog.write("[\(Date())] 锁屏提交超时，直接停麦\n")
+                self.pendingLockStop = false
+                self.stopForScreenLock()
+            }
         }
     }
 
@@ -476,9 +534,11 @@ final class DictationController: ObservableObject {
         }
     }
 
-    /// 立即停麦（用于锁屏）：丢弃未上屏与在途转写，切到关闭态。
+    /// 立即停麦（用于锁屏）：切到关闭态并复位。若还有未落盘内容，调用方已先走提交
+    /// （见 commitBeforeLockStop）；此处到达时通常已无待上屏内容，残留的在途结果按代数丢弃。
     /// 即使当前是 off（全新开启的自动重试仍在排队），也要先取消排队，避免锁屏期间悄悄开麦。
     private func stopForScreenLock() {
+        pendingLockStop = false
         resetEngineBookkeeping()
         // 无论当前状态都停一次：引擎未运行时 stop 是安全空操作。
         recorder.stop()
@@ -525,7 +585,7 @@ final class DictationController: ObservableObject {
             commitRequested = false
             sendAfterCommit = false
             clearBuffer()
-            currentState = .off
+            setState(.off)
             requestStart()
             return
         }
@@ -627,6 +687,11 @@ final class DictationController: ObservableObject {
             if shouldSend {
                 self.pressReturnWhenPasteDrained(attempt: 0)
             }
+        }
+        // 锁屏触发的提交：内容已落盘并尝试粘贴，这里接续完成停麦。
+        if pendingLockStop {
+            pendingLockStop = false
+            stopForScreenLock()
         }
     }
 
@@ -1297,6 +1362,25 @@ final class DictationController: ObservableObject {
         didMuteSystemAudio = false
         let ok = SystemAudioOutput.setMuted(false)
         CrashLog.write("[\(Date())] 解除系统静音 ok=\(ok)\n")
+    }
+
+    /// 退出前停麦并还原系统静音：统一放到 engineQueue 上串行执行，主线程只做有限等待。
+    /// 避免主线程直接操作 AVAudioEngine 与队列中正在进行的 start/rebuild 竞争而卡死；
+    /// 队列万一被阻塞，也会在超时后继续退出（由进程终止回收音频资源）。
+    func prepareForTermination(timeout: TimeInterval = 3) {
+        let semaphore = DispatchSemaphore(value: 0)
+        engineQueue.async { [weak self] in
+            guard let self else {
+                semaphore.signal()
+                return
+            }
+            self.pendingLockStop = false
+            self.resetEngineBookkeeping()
+            self.recorder.stop()
+            self.restoreSystemMute()
+            semaphore.signal()
+        }
+        _ = semaphore.wait(timeout: .now() + timeout)
     }
 
     /// 退出前若仍在 debuff 触发的静音中，解除静音。

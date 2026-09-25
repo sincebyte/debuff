@@ -67,6 +67,9 @@ final class DictationWaveformPanel {
     func setActive(_ active: Bool) {
         viewState.isActive = active
         applyReveal(animated: true)
+        // 兜底：若展开时 stateChanged 恰为 false（例如面板此前被 orderOut 但 isExpanded 仍为真），
+        // 非动画分支不会 orderFront，这里补一次，确保激活后波形一定可见。
+        if active { panel?.orderFrontRegardless() }
     }
 
     func setListening(_ listening: Bool) {
@@ -196,6 +199,12 @@ final class DictationWaveformPanel {
     }
 
     func hide() {
+        // 复位展开/动画状态：否则残留的 isExpanded=true 会让下次 show() 认为无需切换，
+        // 残留的 isRevealAnimating=true 会让后续非动画 setFrame 被守卫挡掉。
+        revealGeneration += 1
+        isRevealAnimating = false
+        isExpanded = false
+        viewState.isActive = false
         panel?.orderOut(nil)
     }
 
