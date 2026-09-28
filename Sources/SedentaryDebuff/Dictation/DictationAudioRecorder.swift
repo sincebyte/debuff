@@ -24,8 +24,16 @@ final class DictationAudioRecorder {
     /// 从设置写入，引擎每次 start() 前会把系统默认输入切到该设备并等其就绪。
     private(set) var inputDeviceUID: String?
 
-    /// 设置本会话要使用的麦克风（nil = 跟随系统默认）。
+    /// 上一次选择、现已被切走的麦克风 uid。切换所选设备时记下，等新设备就绪后
+    /// 显式关闭它，避免 iPhone 等互联设备在切走后仍保持录音/连接。
+    private var staleInputDeviceUID: String?
+
+    /// 设置本会话要使用的麦克风（nil = 跟随系统默认）。若与上次不同，记下旧 uid，
+    /// 待下次 start() 应用新设备后关闭它（见 closeStaleInputIfNeeded）。
     func setInputDevice(uid: String?) {
+        if uid != inputDeviceUID {
+            staleInputDeviceUID = inputDeviceUID
+        }
         inputDeviceUID = uid
     }
 
@@ -55,8 +63,9 @@ final class DictationAudioRecorder {
     private var holdingRouting = false
 
     /// 启动前把系统默认输入切到所选麦克风并等待其真正就绪（inputDeviceUID 为 nil 则
-    /// 跟随系统默认）。引擎未运行时调用。
+    /// 跟随系统默认）。引擎未运行时调用。无论走哪条分支，结束后都会关闭被切走的旧设备。
     private func applySelectedInput() {
+        defer { closeStaleInputIfNeeded() }
         guard let desired = inputDeviceUID, !desired.isEmpty,
               DictationMicrophone.inputDeviceID(forUID: desired) != nil else {
             // 未选设备 / 所选设备不在线：跟随系统默认，退出接管。
@@ -109,12 +118,34 @@ final class DictationAudioRecorder {
 
     /// 停止时还原默认输入：仅还原到「接管前」的设备；该设备已不存在时保持系统当前默认不动。
     private func releaseSelectedInput() {
+        // 会话真正使用过的设备（仅在我们接管过默认输入时才需要显式关闭）。
+        let used = holdingRouting ? inputDeviceUID : nil
         if holdingRouting, let original = originalDefaultInputUID,
            DictationMicrophone.inputDeviceID(forUID: original) != nil,
            DictationMicrophone.defaultInputDeviceUID() != original {
             _ = DictationMicrophone.setDefaultInputDevice(uid: original)
         }
+        // 恢复默认后关闭本次会话用过、现已被切走的设备。否则 iPhone 等互联设备
+        // 会一直保持录音/连接（手机上仍显示正在录音）。
+        if let used, used != DictationMicrophone.defaultInputDeviceUID(),
+           DictationMicrophone.inputDeviceID(forUID: used) != nil {
+            let stopped = DictationMicrophone.stopInputDevice(uid: used)
+            CrashLog.write("[\(Date())] 停止会话：关闭已切走的麦克风 uid=\(used) stopped=\(stopped)\n")
+        }
         clearTakeover()
+    }
+
+    /// 关闭被切走的旧麦克风：新设备应用完成后显式 stop 旧设备。系统默认切走后旧设备
+    /// （尤其 iPhone 等互联设备）仍可能保持 running，不 stop 会一直占着录音/连接。
+    private func closeStaleInputIfNeeded() {
+        guard let stale = staleInputDeviceUID else { return }
+        staleInputDeviceUID = nil
+        // 仍被选中、或已成为系统当前默认（系统还要用它）时不关闭。
+        guard stale != inputDeviceUID,
+              stale != DictationMicrophone.defaultInputDeviceUID(),
+              DictationMicrophone.inputDeviceID(forUID: stale) != nil else { return }
+        let stopped = DictationMicrophone.stopInputDevice(uid: stale)
+        CrashLog.write("[\(Date())] 切换麦克风：关闭被切走的设备 uid=\(stale) stopped=\(stopped)\n")
     }
 
     /// 只清空接管状态，不改动系统默认输入。

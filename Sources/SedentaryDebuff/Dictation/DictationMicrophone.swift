@@ -74,6 +74,13 @@ enum DictationMicrophone {
         return AudioDeviceStart(device, nil) == noErr
     }
 
+    /// 显式停止指定设备。切换麦克风时用于关闭被切走的旧设备：系统默认输入切走后
+    /// 旧设备仍可能保持 running，iPhone 等互联设备会因此一直占着录音/连接不放。
+    static func stopInputDevice(uid: String) -> Bool {
+        guard let device = inputDeviceID(forUID: uid) else { return false }
+        return AudioDeviceStop(device, nil) == noErr
+    }
+
     // MARK: - CoreAudio 底层读取
 
     private static func deviceIDs() -> [AudioDeviceID]? {
