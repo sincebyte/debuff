@@ -6,8 +6,8 @@ import Foundation
 final class DictationController: ObservableObject {
     enum State: Equatable {
         case off       // 引擎关闭：麦克风未开启（空闲，控件隐藏）
-        case active    // 激活：语音上屏，删除/清空/over/发送等指令生效
-        case inactive  // 非激活：待命监听只驱动灰色波形，不切段不转写；仅快捷键重新激活
+        case active    // 激活：麦克风开启，语音上屏，删除/清空/over/发送等指令生效
+        case inactive  // 非激活：麦克风关闭、不收音、波形隐藏；仅快捷键重新激活
         case flushing  // 停止引擎时的收尾转写
     }
 
@@ -84,6 +84,31 @@ final class DictationController: ObservableObject {
     private var autoBootPending = false
     private var autoBootMode: State = .active
     private var autoBootAttempt = 0
+    /// 是否需要在下一次启动尝试前重建引擎。正常启动复用现有引擎更快；只有启动失败
+    /// （设备格式可能过期）时才置位，重建后再重试。
+    private var bootNeedsRebuild = false
+
+    // MARK: 激活链路诊断计时（临时日志，用于定位激活慢在哪一步）
+    private var bootTraceStart: Date?
+    private var bootTraceLast: Date?
+
+    private func bootTraceBegin(_ label: String) {
+        let now = Date()
+        bootTraceStart = now
+        bootTraceLast = now
+        CrashLog.write("[\(Date())] [BOOT] ===== \(label) =====\n")
+    }
+
+    private func bootTrace(_ stage: String) {
+        let now = Date()
+        let delta = bootTraceLast.map { now.timeIntervalSince($0) * 1000 } ?? 0
+        let total = bootTraceStart.map { now.timeIntervalSince($0) * 1000 } ?? 0
+        bootTraceLast = now
+        CrashLog.write(String(
+            format: "[%@] [BOOT] %@  +%.0fms  (累计 %.0fms)\n",
+            "\(now)", stage, delta, total
+        ))
+    }
 
     /// 首次开启失败时的最大重试次数（退避延迟累加，合计约一分钟）。
     private static let maxBootAttempts = 20
@@ -246,6 +271,7 @@ final class DictationController: ObservableObject {
             case .active:
                 self.requestCommit()
             case .inactive:
+                self.bootTraceBegin("toggle: inactive→active")
                 self.setVoiceActive()
             case .flushing:
                 break
@@ -278,13 +304,13 @@ final class DictationController: ObservableObject {
     }
 
     /// 菜单选择麦克风后调用：更新本次/下次会话要用的麦克风（nil = 跟随系统默认）。
-    /// 正在监听时原地重建重启引擎，让系统默认输入切到新选设备并等其就绪后立即生效；
-    /// 引擎未开时只记录目标，下次 start 时由 recorder 切换并唤醒。
+    /// 仅在激活（麦克风正在收音）时原地重建重启引擎，让系统默认输入切到新选设备并等其
+    /// 就绪后立即生效；非激活/关闭时只记录目标，下次激活时由 recorder 切换并唤醒。
     func applyMicrophoneInput() {
         engineQueue.async { [weak self] in
             guard let self else { return }
             self.recorder.setInputDevice(uid: self.settings.microphoneUID)
-            guard self.currentState == .active || self.currentState == .inactive else { return }
+            guard self.currentState == .active else { return }
             CrashLog.write("[\(Date())] 切换麦克风：\(self.settings.microphoneUID ?? "跟随系统默认")，原地重启引擎\n")
             self.segmentSamples.removeAll()
             self.segmentStart = nil
@@ -296,7 +322,7 @@ final class DictationController: ObservableObject {
                 self.markEngineStarted()
                 self.waveformData.reset(sampleRate: self.recorder.sampleRate)
                 CrashLog.write("[\(Date())] 切换麦克风后已重启引擎 state=\(self.currentState)\n")
-                self.setStatus(self.currentState == .active ? "输入中…" : "待命（按 \(self.hotkeyLabel) 重新激活）")
+                self.setStatus("输入中…")
             } catch {
                 // 设备可能刚切走尚未就绪：不打断状态，健康检查会随后自动续上。
                 CrashLog.write("[\(Date())] 切换麦克风后重启失败：\(error.localizedDescription)\n")
@@ -319,9 +345,11 @@ final class DictationController: ObservableObject {
         }
         awaitingPermission = true
         shouldStartOnPermission = true
+        bootTrace("requestStart: 权限请求发出")
         recorder.requestPermission { [weak self] granted in
             guard let self else { return }
             self.engineQueue.async {
+                self.bootTrace("requestStart: 权限回调 granted=\(granted)")
                 self.awaitingPermission = false
                 if granted {
                     // 若期间已锁屏/已停止，此处应放弃开启，避免在锁屏状态下开麦。
@@ -339,6 +367,7 @@ final class DictationController: ObservableObject {
     /// 全新开启（从 off 启动，含解锁后恢复）：重置会话状态后启动引擎。
     /// 麦克风在锁屏/唤醒瞬间往往尚未就绪，start 可能抛错，这里交给自动退避重试自愈。
     private func beginRecording(mode: State = .active) {
+        bootTrace("beginRecording: 进入")
         // 本次会话要用的麦克风（nil = 跟随系统默认）；start 时 recorder 据此切默认输入并唤醒。
         recorder.setInputDevice(uid: settings.microphoneUID)
         segmentSamples.removeAll()
@@ -356,6 +385,7 @@ final class DictationController: ObservableObject {
         // 取消上一次可能仍在排队的启动重试，改用本次目标状态。
         autoBootPending = false
         autoBootAttempt = 0
+        bootNeedsRebuild = false
         bootAndEnter(mode: mode)
     }
 
@@ -372,9 +402,20 @@ final class DictationController: ObservableObject {
     private func attemptBootOnce() {
         guard currentState == .off, autoBootPending else { return }
         do {
-            recorder.rebuildEngine()
+            // 复用现有引擎直接启动：inputNode 已绑定，省去每次激活都新建 AVAudioEngine
+            // 的开销，激活更快。只有失败重试时才重建引擎，清除可能过期的硬件格式
+            // （start 会重新绑定当前设备并重挂 tap）。
+            if bootNeedsRebuild {
+                bootTrace("attemptBootOnce: 重建引擎")
+                recorder.rebuildEngine()
+                bootNeedsRebuild = false
+            }
+            bootTrace("attemptBootOnce: 调用 recorder.start() 前")
             try recorder.start()
+            bootTrace("attemptBootOnce: recorder.start() 成功")
         } catch {
+            // 本次失败：下次尝试先重建引擎再启动。
+            bootNeedsRebuild = true
             autoBootAttempt += 1
             guard autoBootAttempt <= Self.maxBootAttempts else {
                 CrashLog.write("[\(Date())] 启动麦克风连续失败 \(autoBootAttempt) 次，放弃\n")
@@ -406,6 +447,7 @@ final class DictationController: ObservableObject {
 
     /// 引擎启动成功后的 UI 收尾：进入指定状态并展示波形面板。
     private func enterListeningState(_ mode: State) {
+        bootTrace("enterListeningState: 进入")
         waveformData.reset(sampleRate: recorder.sampleRate)
         let initial = mode == .active ? State.active : .inactive
         setState(initial)
@@ -413,6 +455,7 @@ final class DictationController: ObservableObject {
         let isActive = initial == .active
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
+            self.bootTrace("主线程: 开始刷新面板")
             self.waveformPanel.setActiveOpacity(self.settings.activeOpacity)
             self.waveformPanel.setEmptyBufferBehavior(self.settings.emptyBufferBehavior)
             self.waveformPanel.setListening(true)
@@ -422,6 +465,7 @@ final class DictationController: ObservableObject {
             self.waveformPanel.setCleaning(false)
             self.waveformPanel.show()
             self.waveformPanel.setActive(isActive)
+            self.bootTrace("主线程: 面板 setActive(true) 完成（波形出现）")
         }
     }
 
@@ -461,6 +505,7 @@ final class DictationController: ObservableObject {
     private func resetEngineBookkeeping() {
         autoBootPending = false
         autoBootAttempt = 0
+        bootNeedsRebuild = false
         startFailureStreak = 0
         engineStartedAt = nil
         shouldStartOnPermission = false
@@ -522,15 +567,47 @@ final class DictationController: ObservableObject {
         }
     }
 
-    /// 解锁：若锁屏前在监听，恢复到之前的模式（激活/非激活）。
+    /// 解锁：若锁屏前在激活，重新打开麦克风恢复输入；锁屏前是非激活则维持关麦待命，
+    /// 不重新打开麦克风。
     func handleScreenUnlock() {
         engineQueue.async { [weak self] in
             guard let self else { return }
             guard self.shouldRestoreAfterUnlock else { return }
             self.shouldRestoreAfterUnlock = false
             let mode = self.restoreModeOnUnlock
-            CrashLog.write("[\(Date())] 解锁：恢复监听 mode=\(mode)\n")
-            self.requestStart(initialMode: mode)
+            if mode == .active {
+                CrashLog.write("[\(Date())] 解锁：恢复监听 mode=active\n")
+                self.requestStart(initialMode: .active)
+            } else {
+                CrashLog.write("[\(Date())] 解锁：锁屏前为非激活，维持关麦待命\n")
+                self.restoreInactiveIdle()
+            }
+        }
+    }
+
+    /// 恢复到「非激活待命」：麦克风保持关闭、不显示波形，只把状态置为可再次激活。
+    private func restoreInactiveIdle() {
+        // 兜底确保关麦（正常路径锁屏时已停过；重复 stop 是安全空操作）。
+        recorder.stop()
+        segmentSamples.removeAll()
+        segmentStart = nil
+        vad.reset()
+        pending = 0
+        isFlushing = false
+        discardPendingOnStop = false
+        lastError = nil
+        commitRequested = false
+        sendAfterCommit = false
+        resetCleanupBookkeeping()
+        clearBuffer()
+        setState(.inactive)
+        setStatus("待命（按 \(hotkeyLabel) 重新激活）")
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.waveformPanel.setTranscribing(false)
+            self.waveformPanel.setCleaning(false)
+            self.waveformPanel.setListening(false)
+            self.waveformPanel.setActive(false)
         }
     }
 
@@ -570,42 +647,26 @@ final class DictationController: ObservableObject {
 
     // MARK: - 激活 / 非激活
 
-    /// 非激活 → 激活（仅快捷键）。
+    /// 非激活 → 激活（仅快捷键）：非激活期间麦克风是关闭的，这里复位到关闭态后走标准
+    /// 启动流程重新打开麦克风，成功后再进入激活并显示波形。
     private func setVoiceActive() {
         guard currentState == .inactive else { return }
-        guard recorder.isRunning else {
-            // 引擎异常中断：复位到关闭态，按标准流程重新开启麦克风。
-            segmentSamples.removeAll()
-            segmentStart = nil
-            vad.reset()
-            pending = 0
-            isFlushing = false
-            discardPendingOnStop = false
-            lastError = nil
-            commitRequested = false
-            sendAfterCommit = false
-            clearBuffer()
-            setState(.off)
-            requestStart()
-            return
-        }
-        CrashLog.write("[\(Date())] 状态：非激活 → 激活\n")
+        bootTrace("setVoiceActive: 进入")
+        CrashLog.write("[\(Date())] 状态：非激活 → 激活，开启麦克风\n")
         segmentSamples.removeAll()
         segmentStart = nil
         vad.reset()
-        updateCutCountdown(nil)
+        pending = 0
+        isFlushing = false
+        discardPendingOnStop = false
+        lastError = nil
+        commitRequested = false
+        sendAfterCommit = false
         resetCleanupBookkeeping()
         clearBuffer()
-        setState(.active)
-        setStatus("输入中…")
-        DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
-            self.waveformPanel.setTranscribing(false)
-            self.waveformPanel.setCleaning(false)
-            self.waveformPanel.setCutCountdown(nil)
-            self.waveformPanel.show()
-            self.waveformPanel.setActive(true)
-        }
+        updateCutCountdown(nil)
+        setState(.off)
+        requestStart()
     }
 
     /// 激活 → 提交（语音「over」或快捷键 ⌥D/End）。先把切换前还没触发转写的尾句
@@ -675,11 +736,16 @@ final class DictationController: ObservableObject {
         sendAfterCommit = false
         setState(.inactive)
         setStatus("待命（按 \(hotkeyLabel) 重新激活）")
+        // 非激活即关麦：音频已全部采集完（收尾段在 requestCommit 时已取走），这里立即
+        // 停掉引擎并释放所选麦克风，之后只有再次激活才会重新打开。先切状态再停引擎，
+        // 使随后可能到来的配置变化通知看到的是非激活态，不会误把麦克风重新拉起来。
+        recorder.stop()
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             // 顺序：先收起 loading（波形复位），再切非激活灰，最后把文本贴进当前输入框。
             self.waveformPanel.setTranscribing(false)
             self.waveformPanel.setCleaning(false)
+            self.waveformPanel.setListening(false)
             self.waveformPanel.setActive(false)
             if !text.isEmpty {
                 self.enqueuePaste(text)
@@ -713,10 +779,14 @@ final class DictationController: ObservableObject {
     }
 
     private func applyEngineConfigurationChange() {
-        // 无论是否在监听都重建，保证下次 start() 用的是新硬件的格式。
+        // 若在抑制窗口内（例如刚由本次启动/重启触发的回声），跳过：否则「停麦 → 配置变化
+        // 排队 → 用户很快重新激活」时，这条过期的处理会把刚起来的会话再次重建打断。
+        if let suppressUntil = configChangeSuppressUntil, Date() < suppressUntil { return }
+        // 无论是否在收音都重建，保证下次 start() 用的是新硬件的格式；但只有激活态才续麦，
+        // 非激活态麦克风本就关闭，不能被配置变化通知重新拉起来。
         recorder.rebuildEngine()
         recorder.resetBufferClock()
-        guard currentState == .active || currentState == .inactive else { return }
+        guard currentState == .active else { return }
         CrashLog.write("[\(Date())] 输入设备变化：引擎被系统停止，原地续麦 state=\(currentState)\n")
         segmentSamples.removeAll()
         segmentStart = nil
@@ -743,7 +813,8 @@ final class DictationController: ObservableObject {
     /// 周期健康检查（engineQueue 上运行）：麦克风应开未开、或引擎僵死（开着却没
     /// 数据流）时原地重建重启，让锁屏/唤醒、设备重连后的录音自动恢复。
     private func healthCheck() {
-        guard currentState == .active || currentState == .inactive else { return }
+        // 只有激活态才应收音：非激活/关闭时麦克风是关的，不做任何自愈重启。
+        guard currentState == .active else { return }
         // 刚启动/刚重建后的观察期：给设备就绪留缓冲，期间不做判定（避免反复重建）。
         if let started = engineStartedAt,
            Date().timeIntervalSince(started) <= Self.healthCheckInterval {
@@ -781,7 +852,7 @@ final class DictationController: ObservableObject {
     /// 监听中原地恢复引擎（保留当前激活/非激活状态与波形面板）。失败时交由下一轮
     /// 健康检查继续，不打断现有状态。
     private func recoverEngineInPlace(reason: String) {
-        guard currentState == .active || currentState == .inactive else { return }
+        guard currentState == .active else { return }
         CrashLog.write("[\(Date())] 原地重建重启引擎：\(reason) state=\(currentState)\n")
         segmentSamples.removeAll()
         segmentStart = nil
@@ -834,8 +905,8 @@ final class DictationController: ObservableObject {
         let samples = readSamples(buffer)
         guard !samples.isEmpty else { return }
         waveformData.append(samples)
-        // 非激活待命只驱动波形：不做上屏切段/STT 转写，也不喂给语音日记，
-        // 避免把待命期环境杂音后台转写进日记。
+        // 只有激活态才收音：非激活时麦克风已关闭，正常情况下不会再有缓冲进来；这里
+        // 仍做防御性判断，避免停麦瞬间的尾随缓冲被误切段/转写或写进语音日记。
         guard currentState == .active else { return }
         segmentSamples.append(contentsOf: samples)
         if segmentStart == nil {

@@ -12,6 +12,9 @@ private let bufferSpacing: CGFloat = 2
 private let bufferAreaHeight: CGFloat = 93
 /// 面板外围底板的内边距（与视图层一致，保证高度精确匹配）。
 private let boardPadding: CGFloat = 4
+/// 面板圆角（与视图层 `panelCornerRadius` 一致）：用于 AppKit 层的内容视图硬裁，
+/// 兜底保证 Liquid Glass 在透明无边框窗口里不会露出方形背板。
+private let waveformPanelCornerRadius: CGFloat = 8
 /// 顶部底板 + 音柱栏（含与文本区间距）留给拖拽，鼠标事件穿透给面板内容视图。
 private let passThroughTopHeight: CGFloat = boardPadding + waveformHeight + bufferSpacing
 /// 右缘留给拖拽调宽。
@@ -232,6 +235,10 @@ final class DictationWaveformPanel {
         )
         panel.isOpaque = false
         panel.backgroundColor = .clear
+        // Liquid Glass 会跟随系统外观：浅色模式下 `.regular` 玻璃是奶白磨砂，叠黑色 tint
+        // 也会发灰白。把面板强制为深色外观，让玻璃按深色变体渲染 —— 既发黑，又保留毛玻璃
+        // 的模糊/折射。面板内内容本就是白字，深色外观一致。
+        panel.appearance = NSAppearance(named: .darkAqua)
         panel.level = NSWindow.Level(rawValue: NSWindow.Level.statusBar.rawValue + 1)
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         panel.hasShadow = false
@@ -241,6 +248,11 @@ final class DictationWaveformPanel {
         panel.minSize = .zero
         panel.contentMinSize = .zero
         panel.contentView = content
+        // AppKit 层圆角硬裁：无边框窗口默认方角，Liquid Glass 的背板在透明窗口里
+        // 可能渲染成方形，这里把内容视图裁成圆角作为兜底，确保圆角不被方形底色破坏。
+        content.wantsLayer = true
+        content.layer?.cornerRadius = waveformPanelCornerRadius
+        content.layer?.masksToBounds = true
         panel.setContentSize(size)
         self.panel = panel
         applyReveal(animated: false)

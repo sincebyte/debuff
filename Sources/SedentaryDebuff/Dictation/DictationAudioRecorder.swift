@@ -69,6 +69,7 @@ final class DictationAudioRecorder {
         guard let desired = inputDeviceUID, !desired.isEmpty,
               DictationMicrophone.inputDeviceID(forUID: desired) != nil else {
             // 未选设备 / 所选设备不在线：跟随系统默认，退出接管。
+            CrashLog.write("[\(Date())] [BOOTREC] applySelectedInput: 跟随系统默认，快速路径\n")
             releaseSelectedInput()
             return
         }
@@ -91,15 +92,22 @@ final class DictationAudioRecorder {
         }
         holdingRouting = true
         let runningBefore = DictationMicrophone.isInputRunning(forUID: desired)
+        let wakeStart = Date()
         let awake = wakeSelectedInput(uid: desired)
-        CrashLog.write("[\(Date())] 唤醒麦克风 uid=\(desired) 切换默认=\(switched) 唤醒前running=\(runningBefore) 就绪=\(awake)\n")
+        let wakeMS = Date().timeIntervalSince(wakeStart) * 1000
+        CrashLog.write(String(
+            format: "[%@] [BOOTREC] applySelectedInput: 选麦唤醒 uid=%@ 切换默认=%@ 唤醒前running=%@ 就绪=%@ 唤醒耗时=%.0fms\n",
+            "\(Date())", desired, "\(switched)", "\(runningBefore)", "\(awake)", wakeMS
+        ))
     }
 
-    /// 等待设备进入 running；超时则显式启动一次再等，尽量把互联设备从
-    /// 「已列出但未运行」状态里拉起来。返回最终是否 running。
+    /// 等待设备进入 running；先给系统一个很短的「切为默认后自唤醒」窗口，超时就立即显式
+    /// 启动再等。USB 等设备（如 DJI 无线麦）被切为默认后并不会自动 running，旧实现先空等
+    /// 满 1.5 秒才显式启动，导致每次激活都白等 1.5 秒；这里改为短探测 + 立即启动，把这段
+    /// 死等消除，同时仍保留「系统自唤醒」的机会（探测窗口内已 running 就直接返回）。
     @discardableResult
     private func wakeSelectedInput(uid: String) -> Bool {
-        if waitUntilRunning(uid: uid, timeout: Self.inputWakeTimeout) { return true }
+        if waitUntilRunning(uid: uid, timeout: Self.inputSelfWakeProbe) { return true }
         _ = DictationMicrophone.startInputDevice(uid: uid)
         return waitUntilRunning(uid: uid, timeout: Self.inputWakeTimeout)
     }
@@ -108,10 +116,13 @@ final class DictationAudioRecorder {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
             if DictationMicrophone.isInputRunning(forUID: uid) { return true }
-            Thread.sleep(forTimeInterval: 0.1)
+            Thread.sleep(forTimeInterval: 0.05)
         }
         return DictationMicrophone.isInputRunning(forUID: uid)
     }
+
+    /// 切为默认输入后，先给系统这么短的窗口尝试自唤醒；超时立即显式 AudioDeviceStart。
+    private static let inputSelfWakeProbe: TimeInterval = 0.2
 
     /// 本次唤醒等待上限：互联设备成为默认输入后通常 1 秒内就开始出流。
     private static let inputWakeTimeout: TimeInterval = 1.5
@@ -181,9 +192,9 @@ final class DictationAudioRecorder {
     func requestPermission(completion: @escaping (Bool) -> Void) {
         switch AVCaptureDevice.authorizationStatus(for: .audio) {
         case .authorized:
-            DispatchQueue.main.async {
-                completion(true)
-            }
+            // 已授权：同步回调，省去一次主线程往返，让激活启动更快。
+            // 调用方（DictationController）会在回调里自行切回 engineQueue，线程安全。
+            completion(true)
         case .notDetermined:
             AVCaptureDevice.requestAccess(for: .audio) { granted in
                 DispatchQueue.main.async {
@@ -198,6 +209,16 @@ final class DictationAudioRecorder {
     }
 
     func start() throws {
+        let t0 = Date()
+        var tLast = t0
+        func stage(_ name: String) {
+            let now = Date()
+            CrashLog.write(String(
+                format: "[%@] [BOOTREC] %@  +%.0fms  (start 累计 %.0fms)\n",
+                "\(now)", name, now.timeIntervalSince(tLast) * 1000, now.timeIntervalSince(t0) * 1000
+            ))
+            tLast = now
+        }
         if engine.isRunning {
             engine.stop()
         }
@@ -209,6 +230,7 @@ final class DictationAudioRecorder {
         resetBufferClock()
         // 先把系统默认输入切到所选麦克风并等它就绪，再按当前设备格式挂 tap。
         applySelectedInput()
+        stage("applySelectedInput（选麦/唤醒）")
         let input = engine.inputNode
         let format = input.outputFormat(forBus: 0)
         guard format.sampleRate > 0, format.channelCount > 0 else {
@@ -231,8 +253,11 @@ final class DictationAudioRecorder {
             throw DictationRecorderError.tapCreationFailed(tapError as String? ?? "未知原因")
         }
         tapInstalled = true
+        stage("installTap")
         engine.prepare()
+        stage("engine.prepare")
         try engine.start()
+        stage("engine.start（真正打开麦克风）")
     }
 
     func stop() {

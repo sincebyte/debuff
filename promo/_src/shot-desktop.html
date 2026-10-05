@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<style>
+  @font-face {
+    font-family: 'DepartureMono';
+    src: url('file:///Users/van/workspace/debuff/Sources/SedentaryDebuff/Resources/DepartureMono-Regular.otf') format('opentype');
+  }
+  html, body { margin: 0; padding: 0; }
+  body {
+    position: relative; width: 1000px; height: 600px; overflow: hidden;
+    background:
+      radial-gradient(900px 500px at 78% 12%, rgba(56,120,180,0.35), transparent 60%),
+      radial-gradient(700px 500px at 15% 95%, rgba(120,60,140,0.28), transparent 60%),
+      linear-gradient(150deg, #14202f 0%, #0b1018 55%, #070a0f 100%);
+    font-family: -apple-system, "PingFang SC", "Helvetica Neue", sans-serif;
+  }
+  .menubar {
+    position: absolute; left: 0; top: 0; width: 1000px; height: 30px;
+    background: rgba(8,10,13,0.55); border-bottom: 1px solid rgba(255,255,255,0.07);
+    display: flex; align-items: center; padding: 0 16px; box-sizing: border-box;
+    color: #e6e8ec; font-size: 14px; backdrop-filter: blur(20px);
+  }
+  .menubar .left { display: flex; gap: 20px; align-items: center; }
+  .menubar .left b { font-weight: 600; }
+  .menubar .left span { color: #b9bdc4; }
+  .menubar .right { margin-left: auto; display: flex; gap: 16px; align-items: center; color: #cfd3d9; }
+  .menubar .right img { width: 22px; height: 22px; display: block; border-radius: 5px; }
+  .huds { position: absolute; top: 74px; right: 56px; display: flex; gap: 22px; align-items: flex-start; filter: drop-shadow(0 12px 24px rgba(0,0,0,0.55)); }
+  .hud { width: 104px; display: flex; flex-direction: column; align-items: center; }
+  .frame { position: relative; width: 104px; height: 104px; }
+  .icon { position: absolute; left: 11px; top: 11px; width: 82px; height: 82px; border-radius: 9px; object-fit: cover; background: #111; }
+  .frame .border { position: absolute; left: 0; top: 0; width: 104px; height: 104px; }
+  .time {
+    margin-top: 3px; font-family: 'DepartureMono', ui-monospace, monospace;
+    font-size: 31px; line-height: 36px; color: #f2d973;
+    text-shadow: -2px 0 #000,2px 0 #000,0 -2px #000,0 2px #000,-2px -2px #000,-2px 2px #000,2px -2px #000,2px 2px #000;
+    white-space: nowrap;
+  }
+</style>
+</head>
+<body>
+  <div class="menubar">
+    <div class="left"><b>Finder</b><span>文件</span><span>编辑</span><span>显示</span><span>前往</span></div>
+    <div class="right">
+      <span>周一 15:24</span>
+      <img src="file:///Users/van/workspace/debuff/App/appicon.png">
+      <span>100%</span>
+    </div>
+  </div>
+  <div class="huds">
+    <div class="hud">
+      <div class="frame">
+        <img class="icon" src="file:///Users/van/workspace/debuff/Sources/SedentaryDebuff/Resources/wechat.png">
+        <img class="border" src="file:///Users/van/workspace/debuff/Sources/SedentaryDebuff/Resources/border.png">
+      </div>
+      <div class="time">1.5m</div>
+    </div>
+    <div class="hud">
+      <div class="frame">
+        <img class="icon" src="file:///Users/van/workspace/debuff/Sources/SedentaryDebuff/Resources/飞书.png">
+        <img class="border" src="file:///Users/van/workspace/debuff/Sources/SedentaryDebuff/Resources/border.png">
+      </div>
+      <div class="time">1.5m</div>
+    </div>
+    <div class="hud">
+      <div class="frame">
+        <img class="icon" src="file:///Users/van/workspace/debuff/Sources/SedentaryDebuff/Resources/sentinel-juggernautstance-128.png">
+        <img class="border" src="file:///Users/van/workspace/debuff/Sources/SedentaryDebuff/Resources/border.png">
+      </div>
+      <div class="time">45.5m</div>
+    </div>
+  </div>
+</body>
+</html>

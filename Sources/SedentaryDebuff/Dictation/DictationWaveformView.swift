@@ -36,8 +36,12 @@ struct DictationWaveformView: View {
     /// 面板底板圆角。
     private let panelCornerRadius: CGFloat = 8
     /// 面板内向描边：沿圆角内侧勾一圈细边，让整块 UI 的轮廓更清晰。
-    private let panelBorderWidth: CGFloat = 1.5
+    private let panelBorderWidth: CGFloat = 0.5
     private let panelBorderColor = Color.white.opacity(0.35)
+    /// macOS 26+ Liquid Glass 的深色着色。系统玻璃会跟随明暗外观自适应，纯玻璃在浅色
+    /// 背景上会让白色波形/文本失去对比；这里压一层深色 tint，既保留毛玻璃通透感，
+    /// 又保证内容在明暗两种外观下都可读。
+    private let panelGlassTint = Color.black.opacity(0.6)
     /// 面板外围底板的内边距：底板完整包裹内容，录屏时中间无背景缝隙。
     private let boardPadding: CGFloat = 4
     /// 波形条与缓冲文本区间距（与布局层一致）。
@@ -69,8 +73,11 @@ struct DictationWaveformView: View {
                     .frame(height: loadingBandHeight)
             }
         }
-        .clipShape(RoundedRectangle(cornerRadius: panelCornerRadius, style: .continuous))
         .background(panelBackground)
+        // 裁剪必须放在玻璃底板「之后」：Liquid Glass 在无边框透明窗口里会把背板铺成
+        // 方形，若只裁内容（裁在 background 之前）则玻璃的方形底会从圆角外露出来。
+        // 这里把「内容 + 玻璃」整块一起裁到圆角，圆角才不会被方形底色破坏。
+        .clipShape(RoundedRectangle(cornerRadius: panelCornerRadius, style: .continuous))
         // 向内描边置于最上层：`strokeBorder` 只画在圆角内侧，不被底板或内容遮挡。
         .overlay {
             RoundedRectangle(cornerRadius: panelCornerRadius, style: .continuous)
@@ -87,14 +94,27 @@ struct DictationWaveformView: View {
     }
 
     /// 统一底板：铺满整个面板，让波形与文本区之间没有透视到桌面的缝隙，
-    /// 录屏时能稳定截取整块面板而不带背景干扰。无外边框，边界由内容自身处理。
+    /// 录屏时能稳定截取整块面板而不带背景干扰。
+    /// macOS 26（Tahoe）起优先使用系统 Liquid Glass（毛玻璃）材质；更早系统回退到
+    /// ultraThinMaterial + 深色蒙层 + 噪点，保持一致的深色观感与白字可读性。
+    @ViewBuilder
     private var panelBackground: some View {
-        ZStack {
-            Rectangle().fill(.ultraThinMaterial)
-            Color.black.opacity(0.6)
-            GrainOverlay()
+        if #available(macOS 26.0, *) {
+            // 只让玻璃自己成形（圆角由 glassEffect 的 shape 决定），不再额外垫任何
+            // 方形/矩形底层——下方任何几何形状都会在圆角处与玻璃对不齐，破坏圆角。
+            Color.clear
+                .glassEffect(
+                    .regular.tint(panelGlassTint),
+                    in: RoundedRectangle(cornerRadius: panelCornerRadius, style: .continuous)
+                )
+        } else {
+            ZStack {
+                Rectangle().fill(.ultraThinMaterial)
+                Color.black.opacity(0.6)
+                GrainOverlay()
+            }
+            .clipShape(RoundedRectangle(cornerRadius: panelCornerRadius, style: .continuous))
         }
-        .clipShape(RoundedRectangle(cornerRadius: panelCornerRadius, style: .continuous))
     }
 
     private var waveformBar: some View {

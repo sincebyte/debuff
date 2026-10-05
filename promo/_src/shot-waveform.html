@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<style>
+  html, body { margin: 0; padding: 0; }
+  body { width: 1000px; height: 400px; overflow: hidden; box-sizing: border-box; background: #0d1117; padding: 20px; }
+  .panel {
+    width: 960px; height: 360px; box-sizing: border-box; border-radius: 24px;
+    background: rgba(18,20,24,0.92);
+    border: 1.5px solid rgba(255,255,255,0.30);
+    box-shadow: 0 30px 80px rgba(0,0,0,0.45);
+    padding: 12px; display: flex; flex-direction: column; gap: 6px;
+    font-family: -apple-system, "PingFang SC", "Helvetica Neue", sans-serif;
+  }
+  .wave { height: 60px; display: flex; align-items: center; justify-content: center; gap: 6px; padding: 0 12px; box-sizing: border-box; }
+  .wave i { display: block; width: 9px; flex: 0 0 9px; border-radius: 4.5px; background: rgb(77,235,153); }
+  .buffer { flex: 1; padding: 9px 12px 12px; display: flex; flex-direction: column; justify-content: flex-end; gap: 9px; }
+  .buffer p { margin: 0; font-size: 36px; line-height: 45px; color: rgba(255,255,255,0.95); }
+  .buffer p.hint { color: rgba(77,235,153,0.8); font-size: 32px; }
+</style>
+</head>
+<body>
+  <div class="panel">
+    <div class="wave"><i style="height:18px;opacity:0.70"></i><i style="height:27px;opacity:0.76"></i><i style="height:21px;opacity:0.82"></i><i style="height:36px;opacity:0.88"></i><i style="height:30px;opacity:0.94"></i><i style="height:45px;opacity:0.70"></i><i style="height:33px;opacity:0.76"></i><i style="height:51px;opacity:0.82"></i><i style="height:39px;opacity:0.88"></i><i style="height:27px;opacity:0.94"></i><i style="height:36px;opacity:0.70"></i><i style="height:48px;opacity:0.76"></i><i style="height:57px;opacity:0.82"></i><i style="height:42px;opacity:0.88"></i><i style="height:30px;opacity:0.94"></i><i style="height:21px;opacity:0.70"></i><i style="height:33px;opacity:0.76"></i><i style="height:45px;opacity:0.82"></i><i style="height:54px;opacity:0.88"></i><i style="height:63px;opacity:0.94"></i><i style="height:48px;opacity:0.70"></i><i style="height:36px;opacity:0.76"></i><i style="height:24px;opacity:0.82"></i><i style="height:30px;opacity:0.88"></i><i style="height:42px;opacity:0.94"></i><i style="height:51px;opacity:0.70"></i><i style="height:39px;opacity:0.76"></i><i style="height:27px;opacity:0.82"></i><i style="height:33px;opacity:0.88"></i><i style="height:45px;opacity:0.94"></i><i style="height:36px;opacity:0.70"></i><i style="height:24px;opacity:0.76"></i><i style="height:18px;opacity:0.82"></i><i style="height:27px;opacity:0.88"></i><i style="height:39px;opacity:0.94"></i><i style="height:48px;opacity:0.70"></i><i style="height:33px;opacity:0.76"></i><i style="height:21px;opacity:0.82"></i><i style="height:27px;opacity:0.88"></i><i style="height:36px;opacity:0.94"></i><i style="height:45px;opacity:0.70"></i><i style="height:30px;opacity:0.76"></i><i style="height:21px;opacity:0.82"></i><i style="height:27px;opacity:0.88"></i><i style="height:18px;opacity:0.94"></i></div>
+    <div class="buffer">
+      <p>把这段话转成文字，然后直接贴到当前光标的位置。</p>
+      <p>它会自动纠正错别字，去掉重复词和口水词。</p>
+      <p class="hint">说完按一下快捷键即可提交。</p>
+    </div>
+  </div>
+</body>
+</html>

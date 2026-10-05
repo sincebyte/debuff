@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<style>
+  html, body { margin: 0; padding: 0; }
+  body { width: 1000px; height: 400px; overflow: hidden; box-sizing: border-box; background: #0d1117; padding: 20px; }
+  .panel {
+    width: 960px; height: 360px; box-sizing: border-box; border-radius: 24px;
+    background: rgba(18,20,24,0.92);
+    border: 1.5px solid rgba(255,255,255,0.30);
+    box-shadow: 0 30px 80px rgba(0,0,0,0.45);
+    padding: 12px; display: flex; flex-direction: column; gap: 6px;
+    font-family: -apple-system, "PingFang SC", "Helvetica Neue", sans-serif;
+  }
+  .band { position: relative; height: 84px; border-radius: 10px; overflow: hidden; display: flex; align-items: center; background: rgba(255,255,255,0.04); }
+  .fill { position: absolute; left: 0; top: 0; bottom: 0; width: 68%; background: rgba(0,0,0,0.45); }
+  .label { position: relative; width: 100%; text-align: center; font-size: 33px; font-weight: 500; color: rgba(255,255,255,0.95); }
+  .buffer { flex: 1; padding: 9px 12px 12px; display: flex; flex-direction: column; justify-content: center; gap: 9px; }
+  .buffer p { margin: 0; font-size: 36px; line-height: 45px; color: rgba(255,255,255,0.65); }
+</style>
+</head>
+<body>
+  <div class="panel">
+    <div class="band">
+      <div class="fill"></div>
+      <div class="label">转译中</div>
+    </div>
+    <div class="buffer">
+      <p>把这段话转成文字，然后直接贴到当前光标的位置。</p>
+      <p>它会自动纠正错别字，去掉重复词和口水词。</p>
+    </div>
+  </div>
+</body>
+</html>

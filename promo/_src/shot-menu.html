@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<style>
+  html, body { margin: 0; padding: 0; }
+  body { width: 560px; height: 760px; overflow: hidden; box-sizing: border-box; background: #0d1117; padding: 20px; }
+  .menu {
+    width: 520px; box-sizing: border-box; padding: 6px 0; border-radius: 14px;
+    background: rgba(40,42,46,0.96);
+    border: 1px solid rgba(255,255,255,0.10);
+    box-shadow: 0 24px 60px rgba(0,0,0,0.5);
+    font-family: -apple-system, "PingFang SC", "Helvetica Neue", sans-serif;
+    font-size: 20px; color: #f2f2f5;
+  }
+  .row { position: relative; display: flex; align-items: center; height: 28px; padding: 0 18px 0 38px; white-space: nowrap; }
+  .row.disabled { color: #8c8c92; }
+  .row .check { position: absolute; left: 13px; color: #f2f2f5; }
+  .row .arrow { position: absolute; right: 14px; color: #9a9aa0; }
+  .sep { height: 1px; background: rgba(255,255,255,0.12); margin: 8px 18px; }
+</style>
+</head>
+<body>
+  <div class="menu">
+    <div class="row">久坐定时：0.1 分钟<span class="arrow">›</span></div>
+    <div class="sep"></div>
+    <div class="row disabled">久坐图标</div>
+    <div class="row">选择图片…</div>
+    <div class="row disabled">微信未读图标</div>
+    <div class="row">选择图片…</div>
+    <div class="row disabled">飞书未读图标</div>
+    <div class="row">选择图片…</div>
+    <div class="sep"></div>
+    <div class="row disabled">当前久坐：2.1 分钟</div>
+    <div class="row disabled">微信未读：1.5 分钟</div>
+    <div class="row disabled">飞书未读：1.5 分钟</div>
+    <div class="sep"></div>
+    <div class="row"><span class="check">✓</span>显示 Debuff 状态</div>
+    <div class="sep"></div>
+    <div class="row"><span class="check">✓</span>语音日记：记录激活语音到桌面</div>
+    <div class="row disabled">今日语音输入：1,286 字</div>
+    <div class="row disabled">累计节约：1 天 3 小时 42 分钟</div>
+    <div class="row">设置<span class="arrow">›</span></div>
+    <div class="row">麦克风：跟随系统默认（MacBook 麦克风）<span class="arrow">›</span></div>
+    <div class="row">测试 ASR 服务连接</div>
+    <div class="row">测试大语言模型连接</div>
+    <div class="sep"></div>
+    <div class="row">退出</div>
+  </div>
+</body>
+</html>

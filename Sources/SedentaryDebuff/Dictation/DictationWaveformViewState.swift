@@ -3,7 +3,7 @@ import Foundation
 final class DictationWaveformViewState: ObservableObject {
     /// 是否处于「激活/输入」状态：音柱显示绿色并实时跳动。
     @Published var isActive = false
-    /// 引擎是否在监听（激活或非激活待命）：驱动音柱在灰色待命时也实时跳动。
+    /// 麦克风是否正在收音（仅激活）。非激活时麦克风关闭、波形隐藏，不再有待命跳动。
     @Published var isListening = false
     /// 转写进行中（loading）：波形区铺满进度条，表示大模型正在转译。
     /// 只要有在途转写即显示（VAD 切片、收尾段一并触发），全部返回即消失。
