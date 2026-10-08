@@ -1,5 +1,7 @@
 English | [简体中文](README.zh-CN.md)
 
+intro https://neoemacs.com/debuff
+
 # debuff (Sedentary Timer + WeChat/Feishu Unread + Voice Input)
 
 A native macOS utility: on launch it shows a **settings window** where you can adjust the sedentary threshold and the debuff icon. The timer starts at launch or after you clear the debuff; once the threshold is exceeded, a Warcraft-style **debuff popup** appears: the frame uses the **`border.png`** asset, and the skill icon defaults to **`sentinel-juggernautstance-128.png`** (overridable with a user-chosen image). Below the icon is the timer (minutes, one decimal place, with an `m` suffix). **Double-click** the debuff popup to clear the state and restart the timer.
