@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -215,7 +215,7 @@
       <a href="https://github.com/sincebyte/debuff" target="_blank" rel="noopener">GitHub ↗</a>
     </nav>
     <div class="nav-actions">
-      <button type="button" class="btn btn-ghost lang-toggle" data-lang-toggle aria-label="Switch to English">EN</button>
+      <button type="button" class="btn btn-ghost lang-toggle" data-lang-toggle aria-label="切换到中文">中文</button>
       <a class="btn btn-primary" href="#install" data-en="Get debuff">获取 debuff</a>
     </div>
   </div>
@@ -505,7 +505,7 @@ http://127.0.0.1:8011/v1/audio/transcriptions</pre>
     var saved = null;
     try { saved = localStorage.getItem('debuff.lang'); } catch (e) {}
     try {
-      applyLang(saved === 'en' ? 'en' : 'zh');
+      applyLang(saved === 'zh' ? 'zh' : 'en');
     } finally {
       root.classList.remove('i18n-loading');
     }
