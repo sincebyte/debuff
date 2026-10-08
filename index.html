@@ -6,7 +6,7 @@
 <title>debuff · 给久坐、未读消息和打字加上看得见的 debuff</title>
 <meta name="description" content="debuff 是一款 macOS 菜单栏小工具：久坐计时、微信/飞书未读、本地语音输入三合一，用仿魔兽风格的 debuff 浮窗把看不见的风险变成看得见的提醒。">
 <link rel="icon" href="promo/appicon.png">
-<script>document.documentElement.className += ' js';</script>
+<script>document.documentElement.className += ' js i18n-loading';</script>
 <style>
   @font-face {
     font-family: 'DepartureMono';
@@ -68,6 +68,8 @@
   .nav-links { display: flex; gap: 24px; margin-left: auto; color: var(--muted); font-size: 14px; }
   .nav-links a { transition: color .15s; }
   .nav-links a:hover { color: var(--text); }
+  .nav-actions { display: flex; align-items: center; gap: 12px; margin-left: 24px; }
+  .lang-toggle { padding: 9px 14px; font-family: 'DepartureMono', ui-monospace, monospace; letter-spacing: .5px; cursor: pointer; }
   .btn {
     display: inline-flex; align-items: center; gap: 9px;
     padding: 11px 20px; border-radius: 11px; font-size: 14.5px; font-weight: 600;
@@ -79,7 +81,7 @@
   .btn-primary:hover { box-shadow: 0 10px 30px rgba(55,212,133,0.4); }
   .btn-ghost { background: rgba(255,255,255,0.04); color: var(--text); }
   .btn-ghost:hover { background: rgba(255,255,255,0.08); }
-  @media (max-width: 820px) { .nav-links { display: none; } }
+  @media (max-width: 820px) { .nav-links { display: none; } .nav-actions { margin-left: auto; } }
 
   /* ---------- hero ---------- */
   .hero { position: relative; padding: 84px 0 72px; overflow: hidden; }
@@ -191,6 +193,7 @@
   footer .fbrand { display: flex; align-items: center; gap: 10px; color: var(--muted); }
   footer img { width: 22px; height: 22px; border-radius: 6px; }
 
+  html.i18n-loading body { visibility: hidden; }
   html.js .reveal { opacity: 0; transform: translateY(18px); transition: opacity .6s ease, transform .6s ease; }
   html.js .reveal.in { opacity: 1; transform: none; }
   @media (prefers-reduced-motion: reduce) { html.js .reveal { opacity: 1; transform: none; transition: none; } html { scroll-behavior: auto; } }
@@ -201,17 +204,20 @@
 <header class="nav">
   <div class="wrap">
     <a class="brand" href="#top">
-      <img src="promo/appicon.png" alt="debuff 图标">
+      <img src="promo/appicon.png" alt="debuff 图标" data-en-alt="debuff icon">
       <span class="name">debuff</span>
     </a>
     <nav class="nav-links">
-      <a href="#about">是什么</a>
-      <a href="#features">功能</a>
-      <a href="#asr">本地 ASR</a>
-      <a href="#install">安装</a>
+      <a href="#about" data-en="Overview">是什么</a>
+      <a href="#features" data-en="Features">功能</a>
+      <a href="#asr" data-en="Local ASR">本地 ASR</a>
+      <a href="#install" data-en="Install">安装</a>
       <a href="https://github.com/sincebyte/debuff" target="_blank" rel="noopener">GitHub ↗</a>
     </nav>
-    <a class="btn btn-primary" href="#install" style="margin-left:24px">获取 debuff</a>
+    <div class="nav-actions">
+      <button type="button" class="btn btn-ghost lang-toggle" data-lang-toggle aria-label="Switch to English">EN</button>
+      <a class="btn btn-primary" href="#install" data-en="Get debuff">获取 debuff</a>
+    </div>
   </div>
 </header>
 
@@ -221,27 +227,27 @@
   <div class="hero">
     <div class="wrap">
       <div>
-        <span class="eyebrow"><span class="dot"></span>macOS 13+ · 原生 Swift · 全部本地运行</span>
-        <h1>把看不见的<br><b class="hl">久坐、未读和打字</b><br>变成屏幕上的 debuff</h1>
-        <p class="lead">debuff 是一款常驻菜单栏的 macOS 小工具。久坐太久、微信/飞书有未读、想说句话懒得打字——它都会像游戏里那样，在你的桌面上弹一个仿魔兽风格的 debuff 浮窗。</p>
+        <span class="eyebrow"><span class="dot"></span><span data-en="macOS 13+ · Native Swift · Fully on-device">macOS 13+ · 原生 Swift · 全部本地运行</span></span>
+        <h1 data-en-html="Turn invisible<br><b class=&quot;hl&quot;>sitting, unread and typing</b><br>into a visible debuff">把看不见的<br><b class="hl">久坐、未读和打字</b><br>变成屏幕上的 debuff</h1>
+        <p class="lead" data-en="debuff is a tiny macOS app that lives in your menu bar. Sit too long, leave WeChat/Feishu messages unread, or can't be bothered to type a sentence—and it pops a Warcraft-style debuff onto your desktop, just like a game.">debuff 是一款常驻菜单栏的 macOS 小工具。久坐太久、微信/飞书有未读、想说句话懒得打字——它都会像游戏里那样，在你的桌面上弹一个仿魔兽风格的 debuff 浮窗。</p>
         <div class="cta">
-          <a class="btn btn-primary" href="#install">安装方式</a>
-          <a class="btn btn-ghost" href="https://github.com/sincebyte/debuff" target="_blank" rel="noopener">GitHub 源码</a>
-          <a class="btn btn-ghost" href="#features">看看它做什么</a>
+          <a class="btn btn-primary" href="#install" data-en="How to install">安装方式</a>
+          <a class="btn btn-ghost" href="https://github.com/sincebyte/debuff" target="_blank" rel="noopener" data-en="Source on GitHub">GitHub 源码</a>
+          <a class="btn btn-ghost" href="#features" data-en="See what it does">看看它做什么</a>
         </div>
         <div class="pills">
-          <span class="pill">仿魔兽浮窗</span>
-          <span class="pill">本地 Qwen3-ASR</span>
-          <span class="pill">边说边粘</span>
-          <span class="pill">双击清除</span>
-          <span class="pill">菜单栏常驻</span>
+          <span class="pill" data-en="WoW-style popup">仿魔兽浮窗</span>
+          <span class="pill" data-en="On-device Qwen3-ASR">本地 Qwen3-ASR</span>
+          <span class="pill" data-en="Paste as you speak">边说边粘</span>
+          <span class="pill" data-en="Double-click to clear">双击清除</span>
+          <span class="pill" data-en="Always in menu bar">菜单栏常驻</span>
         </div>
       </div>
       <div class="hero-shot reveal">
         <div class="glow"></div>
         <div class="frame">
-          <div class="bar"><i></i><i></i><i></i><span>debuff — 桌面上的 debuff 浮窗</span></div>
-          <img src="promo/shot-desktop.png" alt="debuff 在 macOS 桌面顶部显示微信、飞书与久坐三个 debuff 浮窗">
+          <div class="bar"><i></i><i></i><i></i><span data-en="debuff — the debuff popup on your desktop">debuff — 桌面上的 debuff 浮窗</span></div>
+          <img src="promo/shot-desktop.png" alt="debuff 在 macOS 桌面顶部显示微信、飞书与久坐三个 debuff 浮窗" data-en-alt="debuff showing three debuff popups—WeChat, Feishu and sitting—atop the macOS desktop">
         </div>
       </div>
     </div>
@@ -251,10 +257,10 @@
   <div class="stats">
     <div class="wrap">
       <div class="grid">
-        <div class="stat reveal"><div class="n">3 合 1</div><div class="t">久坐 · 未读 · 语音输入</div></div>
-        <div class="stat reveal"><div class="n">0 云端</div><div class="t">转写与计时都在本机</div></div>
-        <div class="stat reveal"><div class="n">&lt; 1s</div><div class="t">停顿即切段、实时上屏</div></div>
-        <div class="stat reveal"><div class="n">18 px</div><div class="t">菜单栏常驻，点开即设置</div></div>
+        <div class="stat reveal"><div class="n" data-en="3-in-1">3 合 1</div><div class="t" data-en="Sitting · Unread · Voice input">久坐 · 未读 · 语音输入</div></div>
+        <div class="stat reveal"><div class="n" data-en="0 cloud">0 云端</div><div class="t" data-en="Transcription and timing stay on-device">转写与计时都在本机</div></div>
+        <div class="stat reveal"><div class="n"> &lt; 1s</div><div class="t" data-en="Pause to segment, text appears live">停顿即切段、实时上屏</div></div>
+        <div class="stat reveal"><div class="n">18 px</div><div class="t" data-en="Always in the menu bar, one click to settings">菜单栏常驻，点开即设置</div></div>
       </div>
     </div>
   </div>
@@ -265,18 +271,18 @@
       <div class="real">
         <div class="copy reveal">
           <div class="kicker">What is debuff</div>
-          <h2>不是又一个番茄钟，是把生理风险可视化</h2>
-          <p style="margin-top:18px">久坐带来的代谢与心血管风险，并不会因为你“每天锻炼 30 分钟”就消失。debuff 做的事情很简单：把不可感知的久坐时长，变成屏幕上一枚看得见、还会计时的 debuff。</p>
-          <p>它同时接住了另外两件常被忽略的“状态”：办公软件里堆着的未读消息，以及脑子里想说的话。所有信息都以同一种游戏化的方式呈现——外框、技能图标，以及图标下方保留一位小数的计时（<span style="font-family:ui-monospace,monospace;color:var(--gold)">45.5m</span>）。</p>
+          <h2 data-en="Not another Pomodoro—physical risk, made visible">不是又一个番茄钟，是把生理风险可视化</h2>
+          <p style="margin-top:18px" data-en="The metabolic and cardiovascular risk of sitting does not disappear just because you work out 30 minutes a day. debuff does something simple: it turns imperceptible sitting time into a debuff you can see on screen—one that keeps counting.">久坐带来的代谢与心血管风险，并不会因为你“每天锻炼 30 分钟”就消失。debuff 做的事情很简单：把不可感知的久坐时长，变成屏幕上一枚看得见、还会计时的 debuff。</p>
+          <p><span data-en="It also catches two other states that are all too easy to ignore: unread messages piling up in your work apps, and the words you meant to say. Everything is shown the same gamified way—a border, a skill icon, and a timer below the icon with one decimal place (">它同时接住了另外两件常被忽略的“状态”：办公软件里堆着的未读消息，以及脑子里想说的话。所有信息都以同一种游戏化的方式呈现——外框、技能图标，以及图标下方保留一位小数的计时（</span><span style="font-family:ui-monospace,monospace;color:var(--gold)">45.5m</span><span data-en=").">）。</span></p>
           <ul class="feat-list">
-            <li>计时从启动或双击清除后重新开始</li>
-            <li>双击 debuff 浮窗即清除状态、重新计时</li>
-            <li>每一种 debuff 都可以换成你自己的图标</li>
+            <li data-en="The timer restarts on launch or after a double-click clears it">计时从启动或双击清除后重新开始</li>
+            <li data-en="Double-click a debuff popup to clear the state and restart">双击 debuff 浮窗即清除状态、重新计时</li>
+            <li data-en="Each debuff can use an icon of your own">每一种 debuff 都可以换成你自己的图标</li>
           </ul>
         </div>
         <div class="visual reveal">
-          <div class="shot"><img src="promo/show-real.png" alt="debuff 实机截图：菜单栏设置与桌面上的 debuff 浮窗"></div>
-          <p style="color:var(--muted-2);font-size:12.5px;margin:10px 2px 0">↑ 实机运行截图：菜单栏设置菜单 + 桌面上的 debuff 浮窗</p>
+          <div class="shot"><img src="promo/show-real.png" alt="debuff 实机截图：菜单栏设置与桌面上的 debuff 浮窗" data-en-alt="debuff screenshot: menu-bar settings and the debuff popup on the desktop"></div>
+          <p style="color:var(--muted-2);font-size:12.5px;margin:10px 2px 0" data-en="↑ Real screenshot: menu-bar settings menu + the debuff popup on the desktop">↑ 实机运行截图：菜单栏设置菜单 + 桌面上的 debuff 浮窗</p>
         </div>
       </div>
     </div>
@@ -287,77 +293,77 @@
     <div class="wrap">
       <div class="sec-head reveal">
         <div class="kicker">Features</div>
-        <h2>三个 debuff，一个菜单栏</h2>
-        <p>每件事都在你最需要被提醒的那一刻，用同一套语言出现。</p>
+        <h2 data-en="Three debuffs, one menu bar">三个 debuff，一个菜单栏</h2>
+        <p data-en="Each one appears in the same language, right when you most need the nudge.">每件事都在你最需要被提醒的那一刻，用同一套语言出现。</p>
       </div>
 
       <!-- 1. sedentary -->
       <div class="row">
         <div class="copy reveal">
-          <div class="kicker">01 · 久坐计时</div>
-          <h3><span class="tag">SEDENTARY</span>坐太久，就给你挂个 debuff</h3>
-          <p>启动后自动开始计时，超过你设定的阈值，桌面上就会出现仿魔兽风格的浮窗：外框 + 技能图标 + 计时。计时以分钟为单位，保留一位小数，带单位 <code>m</code>。</p>
+          <div class="kicker" data-en="01 · Sedentary timer">01 · 久坐计时</div>
+          <h3><span class="tag">SEDENTARY</span><span data-en="Sit too long and you get a debuff">坐太久，就给你挂个 debuff</span></h3>
+          <p data-en-html="It starts counting on launch. Once you pass your threshold, a Warcraft-style popup appears on the desktop: border + skill icon + timer. The timer is in minutes with one decimal place and the unit <code>m</code>.">启动后自动开始计时，超过你设定的阈值，桌面上就会出现仿魔兽风格的浮窗：外框 + 技能图标 + 计时。计时以分钟为单位，保留一位小数，带单位 <code>m</code>。</p>
           <ul class="feat-list">
-            <li>阈值可在菜单里调整（菜单栏 → 久坐定时）</li>
-            <li>双击浮窗清除 debuff，并重新开始计时</li>
-            <li>久坐图标可换成任意本地图片</li>
+            <li data-en="Adjust the threshold from the menu (menu bar → Sedentary timer)">阈值可在菜单里调整（菜单栏 → 久坐定时）</li>
+            <li data-en="Double-click the popup to clear the debuff and restart the timer">双击浮窗清除 debuff，并重新开始计时</li>
+            <li data-en="Swap the sitting icon for any local image">久坐图标可换成任意本地图片</li>
           </ul>
         </div>
         <div class="visual reveal">
-          <div class="shot"><img src="promo/shot-hud.png" alt="久坐 debuff 与其他 debuff 浮窗"></div>
+          <div class="shot"><img src="promo/shot-hud.png" alt="久坐 debuff 与其他 debuff 浮窗" data-en-alt="The sedentary debuff and other debuff popups"></div>
         </div>
       </div>
 
       <!-- 2. unread -->
       <div class="row rev">
         <div class="copy reveal">
-          <div class="kicker">02 · 消息未读</div>
-          <h3><span class="tag">WECHAT / FEISHU</span>未读不清，也是一种持续 debuff</h3>
-          <p>读取微信、飞书的 Dock 角标：当未读出现并持续超过阈值，同样弹出一个 debuff 浮窗。自最近一条新消息起计时，图标可分别自定义为微信 / 飞书或其他任意图片。</p>
+          <div class="kicker" data-en="02 · Unread messages">02 · 消息未读</div>
+          <h3><span class="tag">WECHAT / FEISHU</span><span data-en="Unread messages are a debuff that never clears">未读不清，也是一种持续 debuff</span></h3>
+          <p data-en="It reads the Dock badges of WeChat and Feishu: when unread messages appear and stay past the threshold, a debuff popup appears too. The timer starts from the most recent message, and each icon can be customized to WeChat, Feishu or any image.">读取微信、飞书的 Dock 角标：当未读出现并持续超过阈值，同样弹出一个 debuff 浮窗。自最近一条新消息起计时，图标可分别自定义为微信 / 飞书或其他任意图片。</p>
           <ul class="feat-list">
-            <li>微信、飞书各自独立计时与图标</li>
-            <li>多枚浮窗按出现顺序自动排列，久坐始终在最右</li>
-            <li>需要「辅助功能」权限以读取 Dock 角标</li>
+            <li data-en="WeChat and Feishu each get their own timer and icon">微信、飞书各自独立计时与图标</li>
+            <li data-en="Multiple popups line up in order of appearance; sitting always stays rightmost">多枚浮窗按出现顺序自动排列，久坐始终在最右</li>
+            <li data-en="Requires Accessibility permission to read Dock badges">需要「辅助功能」权限以读取 Dock 角标</li>
           </ul>
         </div>
         <div class="visual reveal">
-          <div class="shot pad"><img src="promo/shot-hud.png" alt="微信、飞书未读 debuff 浮窗"></div>
+          <div class="shot pad"><img src="promo/shot-hud.png" alt="微信、飞书未读 debuff 浮窗" data-en-alt="WeChat and Feishu unread debuff popups"></div>
         </div>
       </div>
 
       <!-- 3. voice -->
       <div class="row">
         <div class="copy reveal">
-          <div class="kicker">03 · 语音输入</div>
-          <h3><span class="tag">DICTATION</span>按下快捷键，说完就贴到光标处</h3>
-          <p>全局快捷键唤起麦克风，本地 STT 服务实时转写，并把文字直接粘贴到你当前光标的位置。说了停顿达设定时长就自动切段，支持「边说边粘」。</p>
+          <div class="kicker" data-en="03 · Voice input">03 · 语音输入</div>
+          <h3><span class="tag">DICTATION</span><span data-en="Hit the hotkey, speak, and it pastes at your cursor">按下快捷键，说完就贴到光标处</span></h3>
+          <p data-en="A global hotkey opens the mic, a local STT service transcribes in real time, and the text is pasted straight at your cursor. A pause of the set length auto-segments the speech, with paste-as-you-speak support.">全局快捷键唤起麦克风，本地 STT 服务实时转写，并把文字直接粘贴到你当前光标的位置。说了停顿达设定时长就自动切段，支持「边说边粘」。</p>
           <ul class="feat-list">
-            <li>圆角波形指示条跟随鼠标：激活绿、待命灰，实时跳动</li>
-            <li>VAD 自动切段，临近上限显示 5→1 倒计时</li>
-            <li>说「发送」即回车，说「over」切到待命</li>
-            <li>锁屏自动停麦，解锁自动恢复；可选指定麦克风</li>
+            <li data-en="A rounded waveform bar follows your mouse: green when active, grey when idle, always moving">圆角波形指示条跟随鼠标：激活绿、待命灰，实时跳动</li>
+            <li data-en="VAD auto-segments, with a 5→1 countdown near the max length">VAD 自动切段，临近上限显示 5→1 倒计时</li>
+            <li data-en="Say “send” to press Enter, say “over” to go idle">说「发送」即回车，说「over」切到待命</li>
+            <li data-en="The mic stops on lock and resumes on unlock; pick a specific input device">锁屏自动停麦，解锁自动恢复；可选指定麦克风</li>
           </ul>
         </div>
         <div class="visual reveal">
-          <div class="shot"><img src="promo/shot-waveform.png" alt="语音输入波形指示条与实时缓冲文本"></div>
+          <div class="shot"><img src="promo/shot-waveform.png" alt="语音输入波形指示条与实时缓冲文本" data-en-alt="Voice-input waveform bar with live buffered text"></div>
         </div>
       </div>
 
       <!-- 4. cleanup -->
       <div class="row rev">
         <div class="copy reveal">
-          <div class="kicker">04 · 转写与清整理</div>
-          <h3><span class="tag">CLEAN UP</span>转译 → 清整理，上屏即成品</h3>
-          <p>转写不是终点。启用「清整理」后，每次转写结果会交给大模型纠正错别字、删除重复词与口水词、补全标点；整理完成才允许提交，确保贴上去的是一段可用的文字。整个过程由一条平滑的进度条呈现。</p>
+          <div class="kicker" data-en="04 · Transcription &amp; cleanup">04 · 转写与清整理</div>
+          <h3><span class="tag">CLEAN UP</span><span data-en="Transcribe → clean up: polished the moment it lands">转译 → 清整理，上屏即成品</span></h3>
+          <p data-en="Transcription isn't the finish line. With cleanup enabled, every result goes to an LLM that fixes typos, removes repeated and filler words, and restores punctuation; nothing is submitted until cleanup is done, so what you paste is usable text. A smooth progress bar shows the whole thing.">转写不是终点。启用「清整理」后，每次转写结果会交给大模型纠正错别字、删除重复词与口水词、补全标点；整理完成才允许提交，确保贴上去的是一段可用的文字。整个过程由一条平滑的进度条呈现。</p>
           <ul class="feat-list">
-            <li>OpenAI 兼容的 <code>/v1/audio/transcriptions</code> 接口</li>
-            <li>清整理提示词可编辑，API Key 只存本机</li>
-            <li>语音日记：激活语音逐条写入桌面「语音日记」</li>
-            <li>按 100 字/分钟折算「累计节约时间」</li>
+            <li data-en-html="An OpenAI-compatible <code>/v1/audio/transcriptions</code> endpoint">OpenAI 兼容的 <code>/v1/audio/transcriptions</code> 接口</li>
+            <li data-en="The cleanup prompt is editable; the API key is stored only on-device">清整理提示词可编辑，API Key 只存本机</li>
+            <li data-en="Voice diary: active speech is appended to a “Voice Diary” on your Desktop">语音日记：激活语音逐条写入桌面「语音日记」</li>
+            <li data-en="Time saved is estimated at 100 characters per minute">按 100 字/分钟折算「累计节约时间」</li>
           </ul>
         </div>
         <div class="visual reveal">
-          <div class="shot"><img src="promo/shot-waveform-loading.png" alt="转译中的进度条"></div>
+          <div class="shot"><img src="promo/shot-waveform-loading.png" alt="转译中的进度条" data-en-alt="Progress bar while transcribing"></div>
         </div>
       </div>
     </div>
@@ -368,26 +374,25 @@
     <div class="wrap">
       <div class="sec-head reveal">
         <div class="kicker">Local ASR</div>
-        <h2>本地 ASR：Qwen3-ASR 1.7B</h2>
-        <p>语音输入靠一台跑在本机的 OpenAI 兼容转写服务「听懂」——llama.cpp + Metal 推理。配套服务见 <a class="link" href="https://github.com/sincebyte/LocalAudioSTT" target="_blank" rel="noopener">github.com/sincebyte/LocalAudioSTT</a>（千问 Qwen3-ASR 1.7B）。</p>
+        <h2 data-en="Local ASR: Qwen3-ASR 1.7B">本地 ASR：Qwen3-ASR 1.7B</h2>
+        <p><span data-en="Voice input is understood by an OpenAI-compatible transcription service running on your machine—llama.cpp + Metal inference. The companion service is at ">语音输入靠一台跑在本机的 OpenAI 兼容转写服务「听懂」——llama.cpp + Metal 推理。配套服务见 </span><a class="link" href="https://github.com/sincebyte/LocalAudioSTT" target="_blank" rel="noopener">github.com/sincebyte/LocalAudioSTT</a><span data-en=" (Qwen Qwen3-ASR 1.7B).">（千问 Qwen3-ASR 1.7B）。</span></p>
       </div>
       <div class="install-grid">
         <div class="reveal">
           <div class="cards two">
-            <div class="card"><div class="ico">💸</div><h4>零边际成本</h4><p>离线推理，不按量计费；一次部署，长期使用没有 API 支出。</p></div>
-            <div class="card"><div class="ico">📦</div><h4>体积可控</h4><p>bf16 约 4.7GB、16GB 内存够用；换 Q8_0 量化约 2.5GB，内存减半、速度约快一倍。</p></div>
+            <div class="card"><div class="ico">💸</div><h4 data-en="Zero marginal cost">零边际成本</h4><p data-en="Offline inference, no per-use billing; deploy once and use it long-term with no API spend.">离线推理，不按量计费；一次部署，长期使用没有 API 支出。</p></div>
+            <div class="card"><div class="ico">📦</div><h4 data-en="Manageable size">体积可控</h4><p data-en="bf16 is about 4.7GB and fits in 16GB RAM; switch to Q8_0 quantization for about 2.5GB—half the memory and roughly twice the speed.">bf16 约 4.7GB、16GB 内存够用；换 Q8_0 量化约 2.5GB，内存减半、速度约快一倍。</p></div>
           </div>
         </div>
         <div class="reveal">
-          <pre><span class="c"># 三步跑起本地 ASR 服务</span>
+          <pre><span class="c" data-en="# Run the local ASR service in three steps"># 三步跑起本地 ASR 服务</span>
 git clone https://github.com/sincebyte/LocalAudioSTT.git
 cd LocalAudioSTT
-./build-llama-server.sh --install   <span class="c"># 编译带 Metal 的引擎</span>
-./download-models.sh                <span class="c"># 拉 Qwen3-ASR-1.7B（约 4.7GB）</span>
-./start-server.sh                   <span class="c"># 对外服务默认 127.0.0.1:8011</span></pre>
-          <p style="color:var(--muted);font-size:14px;margin:0">服务就绪后，在 debuff 菜单「设置 → STT 服务地址」里填
-            <code>http://127.0.0.1:8011/v1/audio/transcriptions</code> 即可。地址可自定义，任何 OpenAI 兼容的
-            <code>/v1/audio/transcriptions</code> 服务都能替代。</p>
+./build-llama-server.sh --install   <span class="c" data-en="# Build the Metal-enabled engine"># 编译带 Metal 的引擎</span>
+./download-models.sh                <span class="c" data-en="# Fetch Qwen3-ASR-1.7B (~4.7GB)"># 拉 Qwen3-ASR-1.7B（约 4.7GB）</span>
+./start-server.sh                   <span class="c" data-en="# Serves on 127.0.0.1:8011 by default"># 对外服务默认 127.0.0.1:8011</span></pre>
+          <p style="color:var(--muted);font-size:14px;margin:0"><span data-en="Once the service is ready, enter ">服务就绪后，在 debuff 菜单「设置 → STT 服务地址」里填 </span><code>http://127.0.0.1:8011/v1/audio/transcriptions</code><span data-en-html=" under debuff's “Settings → STT service URL”. The URL is configurable; any OpenAI-compatible <code>/v1/audio/transcriptions</code> service will do."> 即可。地址可自定义，任何 OpenAI 兼容的
+            <code>/v1/audio/transcriptions</code> 服务都能替代。</span></p>
         </div>
       </div>
     </div>
@@ -398,31 +403,31 @@ cd LocalAudioSTT
     <div class="wrap">
       <div class="sec-head reveal">
         <div class="kicker">Install</div>
-        <h2>克隆、编译、拖进「应用程序」</h2>
-        <p>仓库地址：<a class="link" href="https://github.com/sincebyte/debuff" target="_blank" rel="noopener">github.com/sincebyte/debuff</a>。使用 Swift Package Manager 构建，或用脚本打包成标准 <code>.app</code>。</p>
+        <h2 data-en="Clone, build, drag into Applications">克隆、编译、拖进「应用程序」</h2>
+        <p><span data-en="Repo: ">仓库地址：</span><a class="link" href="https://github.com/sincebyte/debuff" target="_blank" rel="noopener">github.com/sincebyte/debuff</a><span data-en-html=". Build with Swift Package Manager, or use the script to package a standard <code>.app</code>.">。使用 Swift Package Manager 构建，或用脚本打包成标准 <code>.app</code>。</span></p>
       </div>
       <div class="install-grid">
         <div class="reveal">
-          <pre><span class="c"># 1. 克隆仓库并编译运行（Release）</span>
+          <pre><span class="c" data-en="# 1. Clone, build and run (Release)"># 1. 克隆仓库并编译运行（Release）</span>
 git clone https://github.com/sincebyte/debuff.git
 cd debuff
 swift build -c release
 ./.build/release/SedentaryDebuff</pre>
-          <pre><span class="c"># 2. 打包为 .app，拖入「应用程序」</span>
-./scripts/package-macos-app.sh   <span class="c"># 产物 dist/debuff.app</span>
+          <pre><span class="c" data-en="# 2. Package as .app, drag into Applications"># 2. 打包为 .app，拖入「应用程序」</span>
+./scripts/package-macos-app.sh   <span class="c" data-en="# Output: dist/debuff.app"># 产物 dist/debuff.app</span>
 cp -R dist/debuff.app /Applications/</pre>
-          <pre><span class="c"># 3. 接入本地 ASR 服务（见上方「本地 ASR」）</span>
-<span class="c">#    服务对外地址（OpenAI 兼容）：</span>
+          <pre><span class="c" data-en="# 3. Connect the local ASR service (see “Local ASR” above)"># 3. 接入本地 ASR 服务（见上方「本地 ASR」）</span>
+<span class="c" data-en="#    Service endpoint (OpenAI-compatible):">#    服务对外地址（OpenAI 兼容）：</span>
 http://127.0.0.1:8011/v1/audio/transcriptions</pre>
         </div>
         <div class="reveal">
           <ul class="req">
-            <li><span class="k">01</span><span><b>系统</b>：macOS 13 或更高版本</span></li>
-            <li><span class="k">02</span><span><b>工具链</b>：Swift 5.9+（随 Xcode 或 Command Line Tools 安装）</span></li>
-            <li><span class="k">03</span><span><b>语音输入</b>：一个本地 OpenAI 兼容 STT 服务（Qwen3-ASR 1.7B，见上方「本地 ASR」）</span></li>
-            <li><span class="k">04</span><span><b>权限</b>：麦克风（录音）、辅助功能（读取角标 + 模拟 ⌘V 粘贴）</span></li>
+            <li><span class="k">01</span><span><b data-en="OS">系统</b><span data-en=": macOS 13 or later">：macOS 13 或更高版本</span></span></li>
+            <li><span class="k">02</span><span><b data-en="Toolchain">工具链</b><span data-en=": Swift 5.9+ (installed with Xcode or the Command Line Tools)">：Swift 5.9+（随 Xcode 或 Command Line Tools 安装）</span></span></li>
+            <li><span class="k">03</span><span><b data-en="Voice input">语音输入</b><span data-en=": a local OpenAI-compatible STT service (Qwen3-ASR 1.7B, see “Local ASR” above)">：一个本地 OpenAI 兼容 STT 服务（Qwen3-ASR 1.7B，见上方「本地 ASR」）</span></span></li>
+            <li><span class="k">04</span><span><b data-en="Permissions">权限</b><span data-en=": Microphone (recording) and Accessibility (read badges + simulate ⌘V paste)">：麦克风（录音）、辅助功能（读取角标 + 模拟 ⌘V 粘贴）</span></span></li>
           </ul>
-          <p style="color:var(--muted-2);font-size:13px;margin-top:16px">建议运行脚本打包出的 <code>dist/debuff.app</code>，权限提示才能正常弹出。</p>
+          <p style="color:var(--muted-2);font-size:13px;margin-top:16px"><span data-en-html="Run the packaged ">建议运行脚本打包出的 </span><code>dist/debuff.app</code><span data-en=" so permission prompts appear correctly.">，权限提示才能正常弹出。</span></p>
         </div>
       </div>
     </div>
@@ -433,22 +438,78 @@ http://127.0.0.1:8011/v1/audio/transcriptions</pre>
   <div class="wrap">
     <div class="fbrand">
       <img src="promo/appicon.png" alt="debuff">
-      <span><b style="color:var(--text);font-family:'DepartureMono',monospace">debuff</b> — 给久坐、未读与打字加上看得见的 debuff。</span>
+      <span><b style="color:var(--text);font-family:'DepartureMono',monospace">debuff</b><span data-en=" — a visible debuff for sitting, unread messages and typing."> — 给久坐、未读与打字加上看得见的 debuff。</span></span>
     </div>
-    <div>macOS · Swift · 本地优先 · <a class="link" href="https://github.com/sincebyte/debuff" target="_blank" rel="noopener">github.com/sincebyte/debuff</a></div>
+    <div><span data-en="macOS · Swift · Local-first · ">macOS · Swift · 本地优先 · </span><a class="link" href="https://github.com/sincebyte/debuff" target="_blank" rel="noopener">github.com/sincebyte/debuff</a></div>
   </div>
 </footer>
 
 <script>
   (function () {
+    var root = document.documentElement;
+
+    // ---------- reveal on scroll ----------
     var els = document.querySelectorAll('.reveal');
-    if (!('IntersectionObserver' in window)) { els.forEach(function (e) { e.classList.add('in'); }); return; }
-    var io = new IntersectionObserver(function (entries) {
-      entries.forEach(function (en) {
-        if (en.isIntersecting) { en.target.classList.add('in'); io.unobserve(en.target); }
+    if (!('IntersectionObserver' in window)) {
+      els.forEach(function (e) { e.classList.add('in'); });
+    } else {
+      var io = new IntersectionObserver(function (entries) {
+        entries.forEach(function (en) {
+          if (en.isIntersecting) { en.target.classList.add('in'); io.unobserve(en.target); }
+        });
+      }, { threshold: 0.12, rootMargin: '0px 0px -40px 0px' });
+      els.forEach(function (e) { io.observe(e); });
+    }
+
+    // ---------- language (zh / en) ----------
+    var EN_TITLE = 'debuff · Make sitting, unread messages and typing visible';
+    var ZH_TITLE = document.title;
+    var descEl = document.querySelector('meta[name="description"]');
+    var ZH_DESC = descEl ? descEl.getAttribute('content') : '';
+    var EN_DESC = 'debuff is a macOS menu-bar utility that combines a sedentary timer, WeChat/Feishu unread badges and local voice input—turning invisible risks into Warcraft-style debuff popups.';
+
+    function applyLang(lang) {
+      var en = lang === 'en';
+      root.lang = en ? 'en' : 'zh-CN';
+
+      document.querySelectorAll('[data-en]').forEach(function (el) {
+        if (!el.hasAttribute('data-zh')) el.setAttribute('data-zh', el.textContent);
+        el.textContent = en ? el.getAttribute('data-en') : el.getAttribute('data-zh');
       });
-    }, { threshold: 0.12, rootMargin: '0px 0px -40px 0px' });
-    els.forEach(function (e) { io.observe(e); });
+      document.querySelectorAll('[data-en-html]').forEach(function (el) {
+        if (!el.hasAttribute('data-zh-html')) el.setAttribute('data-zh-html', el.innerHTML);
+        el.innerHTML = en ? el.getAttribute('data-en-html') : el.getAttribute('data-zh-html');
+      });
+      document.querySelectorAll('[data-en-alt]').forEach(function (el) {
+        if (!el.hasAttribute('data-zh-alt')) el.setAttribute('data-zh-alt', el.getAttribute('alt') || '');
+        el.setAttribute('alt', en ? el.getAttribute('data-en-alt') : el.getAttribute('data-zh-alt'));
+      });
+
+      document.title = en ? EN_TITLE : ZH_TITLE;
+      if (descEl) descEl.setAttribute('content', en ? EN_DESC : ZH_DESC);
+
+      document.querySelectorAll('[data-lang-toggle]').forEach(function (b) {
+        b.textContent = en ? '中文' : 'EN';
+        b.setAttribute('aria-label', en ? '切换到中文' : 'Switch to English');
+      });
+
+      try { localStorage.setItem('debuff.lang', en ? 'en' : 'zh'); } catch (e) {}
+    }
+
+    document.querySelectorAll('[data-lang-toggle]').forEach(function (b) {
+      b.addEventListener('click', function () {
+        applyLang(root.lang.indexOf('en') === 0 ? 'zh' : 'en');
+      });
+    });
+
+    var saved = null;
+    try { saved = localStorage.getItem('debuff.lang'); } catch (e) {}
+    var nav = (navigator.language || '').toLowerCase();
+    try {
+      applyLang(saved || (nav.indexOf('zh') === 0 ? 'zh' : 'en'));
+    } finally {
+      root.classList.remove('i18n-loading');
+    }
   })();
 </script>
 </body>
