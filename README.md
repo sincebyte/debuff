@@ -1,4 +1,4 @@
-[English](README.en.md) | 简体中文
+简体中文 | [English](README.en.md)
 
 # debuff（久坐计时 + 微信/飞书 消息未读 + 语音输入）
 

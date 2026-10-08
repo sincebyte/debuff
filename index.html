@@ -504,9 +504,8 @@ http://127.0.0.1:8011/v1/audio/transcriptions</pre>
 
     var saved = null;
     try { saved = localStorage.getItem('debuff.lang'); } catch (e) {}
-    var nav = (navigator.language || '').toLowerCase();
     try {
-      applyLang(saved || (nav.indexOf('zh') === 0 ? 'zh' : 'en'));
+      applyLang(saved === 'en' ? 'en' : 'zh');
     } finally {
       root.classList.remove('i18n-loading');
     }
