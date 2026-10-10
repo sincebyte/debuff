@@ -3,7 +3,7 @@ import SwiftUI
 
 /// 管理仿魔兽风格的置顶浮窗
 final class DebuffPanelController {
-    private var panel: NSPanel?
+    private var panel: KeyablePanel?
     private var moveObserver: NSObjectProtocol?
     /// 每次隐藏浮窗时递增，用于丢弃已过期的「首帧后再显示」调度，避免 `orderOut` 后仍 `orderFront`
     private var visibilityEpoch = 0
@@ -65,8 +65,7 @@ final class DebuffPanelController {
             let content = CombinedDebuffHUDView(
                 weChat: weChat,
                 feishu: feishu,
-                monitor: monitor,
-                onSedentaryDoubleClick: onSedentaryDoubleClick
+                monitor: monitor
             )
             .environmentObject(monitor)
             let host = NSHostingView(rootView: AnyView(content))
@@ -89,6 +88,7 @@ final class DebuffPanelController {
             panel.contentView = host
             panel.setContentSize(size)
             self.panel = panel
+            configureInteraction(panel: panel, monitor: monitor, onSedentaryDoubleClick: onSedentaryDoubleClick)
             // 立刻参与同 level 的 z-order，避免仅等 async 下一帧时才 orderFront，被当前前台 app 的绘制压在下面
             panel.orderFrontRegardless()
 
@@ -113,6 +113,7 @@ final class DebuffPanelController {
             }
         } else {
             guard let panel else { return }
+            configureInteraction(panel: panel, monitor: monitor, onSedentaryDoubleClick: onSedentaryDoubleClick)
             // `setContentSize` 默认固定左下角：变宽时整窗向右长，右对齐的图标会「被挤向屏幕右侧」。
             // 先记下右缘与底边，改尺寸后再把 origin 左移，保持右缘不动，新出现的槽位向左扩展（与 float:right 一致）。
             let oldFrame = panel.frame
@@ -122,6 +123,24 @@ final class DebuffPanelController {
             let newFrame = panel.frame
             panel.setFrameOrigin(NSPoint(x: anchorMaxX - newFrame.width, y: anchorMinY))
             panel.orderFrontRegardless()
+        }
+    }
+
+    /// 面板内容是一整块 `NSHostingView`：其 `hitTest` 会命中整个面板（空白处也一样），
+    /// 且久坐视图原先的 SwiftUI 双击手势会吞掉 mouseDown，导致 `isMovableByWindowBackground`
+    /// 在这些无边框非激活面板上无法起拖。这里改为在窗口层接管鼠标：拖动移动窗口、双击久坐图标清除。
+    private func configureInteraction(
+        panel: KeyablePanel,
+        monitor: SedentaryMonitor,
+        onSedentaryDoubleClick: @escaping () -> Void
+    ) {
+        panel.onSedentaryDoubleClick = onSedentaryDoubleClick
+        panel.sedentaryHitRegion = { [weak monitor] bounds in
+            guard let monitor, monitor.showDebuff else { return nil }
+            // 久坐槽位固定在图标组最右侧，宽度与 `DebuffHUDView.hudWidth` 一致。
+            let w: CGFloat = 50
+            let width = min(w, bounds.width)
+            return NSRect(x: bounds.width - width, y: 0, width: width, height: bounds.height)
         }
     }
 
@@ -201,7 +220,48 @@ final class DebuffPanelController {
     }
 }
 
-/// 允许双击接收，无需先激活应用
+/// 允许双击接收，无需先激活应用；并在无边框非激活面板上接管鼠标事件实现「按住拖动移动」。
 private final class KeyablePanel: NSPanel {
     override var canBecomeKey: Bool { true }
+
+    /// 双击久坐图标：清除 debuff 并重新计时。
+    var onSedentaryDoubleClick: (() -> Void)?
+    /// 双击生效区域（内容视图坐标）。返回 nil 表示当前不响应双击（例如未显示久坐 debuff）。
+    var sedentaryHitRegion: ((_ contentBounds: NSRect) -> NSRect?)?
+
+    private var mouseStartScreen: NSPoint = .zero
+    private var windowStartOrigin: NSPoint = .zero
+    private var isDraggingWindow = false
+
+    override func sendEvent(_ event: NSEvent) {
+        switch event.type {
+        case .leftMouseDown:
+            if event.clickCount == 2,
+               let region = sedentaryHitRegion?(contentView?.bounds ?? .zero),
+               let point = contentView.map({ $0.convert(event.locationInWindow, from: nil) }),
+               region.contains(point) {
+                onSedentaryDoubleClick?()
+                isDraggingWindow = false
+                return
+            }
+            mouseStartScreen = NSEvent.mouseLocation
+            windowStartOrigin = frame.origin
+            isDraggingWindow = false
+            // 刻意不透传左键给 SwiftUI：其手势会吞掉 mouseDown，使窗口无法起拖。
+        case .leftMouseDragged:
+            let current = NSEvent.mouseLocation
+            let dx = current.x - mouseStartScreen.x
+            let dy = current.y - mouseStartScreen.y
+            if !isDraggingWindow {
+                // 先给一个死区，纯点击不移动窗口。
+                guard abs(dx) >= 3 || abs(dy) >= 3 else { return }
+                isDraggingWindow = true
+            }
+            setFrameOrigin(NSPoint(x: windowStartOrigin.x + dx, y: windowStartOrigin.y + dy))
+        case .leftMouseUp:
+            isDraggingWindow = false
+        default:
+            super.sendEvent(event)
+        }
+    }
 }

@@ -6,7 +6,6 @@ struct CombinedDebuffHUDView: View {
     @ObservedObject var weChat: WeChatDebuffMonitor
     @ObservedObject var feishu: FeishuDebuffMonitor
     @ObservedObject var monitor: SedentaryMonitor
-    var onSedentaryDoubleClick: () -> Void
 
     private var weChatOn: Bool { weChat.showWeChatDebuff }
     private var feishuOn: Bool { feishu.showFeishuDebuff }
@@ -47,7 +46,7 @@ struct CombinedDebuffHUDView: View {
                     }
                 }
                 if sitOn {
-                    DebuffHUDView(monitor: monitor, onDoubleClick: onSedentaryDoubleClick)
+                    DebuffHUDView(monitor: monitor)
                         .id("hudSedentaryDebuff")
                 }
             }

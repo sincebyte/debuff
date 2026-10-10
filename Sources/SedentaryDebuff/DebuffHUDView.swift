@@ -3,7 +3,6 @@ import SwiftUI
 
 struct DebuffHUDView: View {
     @ObservedObject var monitor: SedentaryMonitor
-    var onDoubleClick: () -> Void
 
     private var borderImage: NSImage { BundledAssets.borderImage() }
 
@@ -45,10 +44,8 @@ struct DebuffHUDView: View {
 
             outlinedMinutesText
         }
-        .contentShape(Rectangle())
-        .onTapGesture(count: 2) {
-            onDoubleClick()
-        }
+        // 双击清除交由面板层（`DebuffPanelController.KeyablePanel`）处理：SwiftUI 的
+        // `onTapGesture` 会吞掉 mouseDown，使无边框面板无法靠 `isMovableByWindowBackground` 拖动。
         .help("双击清除久坐 debuff 并重新计时")
     }
 
