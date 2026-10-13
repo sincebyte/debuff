@@ -35,6 +35,7 @@ final class DebuffStatusBarController: NSObject, NSMenuDelegate {
     private var itemDictationHotkey: NSMenuItem!
     private var itemMicParent: NSMenuItem!
     private var emptyBufferCheckbox: NSButton!
+    private var preventIdleLockCheckbox: NSButton!
     private var micMenu: NSMenu!
     private var pauseValueButtons: [NSButton] = []
     private var maxSegmentValueButtons: [NSButton] = []
@@ -246,6 +247,16 @@ final class DebuffStatusBarController: NSObject, NSMenuDelegate {
         settingsMenu.addItem(emptyBufferRow.item)
 
         settingsMenu.addItem(NSMenuItem.separator())
+        let noLockRow = checkmarkRow(
+            title: "录音时防止自动锁屏",
+            isOn: s.preventIdleLockWhileRecording,
+            toolTip: "勾选（默认）：录音进行中让屏幕保持点亮，系统不会因为长时间没动鼠标键盘而自动熄屏并锁定，保证持续说话不被打断。手动锁屏（⌃⌘Q、菜单→锁定屏幕等）、合盖、菜单里的睡眠都属于主动动作，不受影响，照常生效。不勾选：完全交给系统，按你设置的熄屏/锁定时间执行。",
+            action: #selector(togglePreventIdleLock(_:))
+        )
+        preventIdleLockCheckbox = noLockRow.button
+        settingsMenu.addItem(noLockRow.item)
+
+        settingsMenu.addItem(NSMenuItem.separator())
         settingsMenu.addItem(subHeader("STT 服务地址"))
         itemDictationURL = makeDisabled(s.sttURLString)
         settingsMenu.addItem(itemDictationURL)
@@ -431,6 +442,11 @@ final class DebuffStatusBarController: NSObject, NSMenuDelegate {
     @objc private func toggleEmptyBufferBehavior(_ sender: NSButton) {
         services.dictation.settings.emptyBufferBehavior = sender.state == .on ? .inactive : .collapse
         services.dictation.applyEmptyBufferBehavior()
+        refreshDictationItems()
+    }
+
+    @objc private func togglePreventIdleLock(_ sender: NSButton) {
+        services.dictation.settings.preventIdleLockWhileRecording = sender.state == .on
         refreshDictationItems()
     }
 
@@ -751,6 +767,7 @@ final class DebuffStatusBarController: NSObject, NSMenuDelegate {
         journalCheckbox.state = s.journalEnabled ? .on : .off
         cleanupCheckbox.state = s.cleanupEnabled ? .on : .off
         emptyBufferCheckbox.state = s.emptyBufferBehavior == .inactive ? .on : .off
+        preventIdleLockCheckbox.state = s.preventIdleLockWhileRecording ? .on : .off
         itemJournalTodayText.title = journalTodayLine
         itemJournalSavedTime.title = journalSavedLine
         itemDictationURL.title = s.sttURLString

@@ -68,6 +68,13 @@ final class DictationSettings: ObservableObject {
     /// 激活语音输入时静音系统声音：固定开启，不开放设置；离开激活时恢复激活前的静音状态。
     let muteSystemAudioWhenActive = true
 
+    /// 录音期间阻止「因用户空闲而自动熄屏/锁屏」：持有 NoDisplaySleep 声明让屏幕保持点亮，
+    /// 避免长时间不碰鼠标键盘被系统静默锁定。手动锁屏、合盖、菜单里的睡眠属于用户主动动作，
+    /// 不受影响，照常生效。默认开启。
+    @Published var preventIdleLockWhileRecording: Bool {
+        didSet { UserDefaults.standard.set(preventIdleLockWhileRecording, forKey: Self.preventIdleLockKey) }
+    }
+
     /// 清整理接口地址（OpenAI 兼容的 Chat Completions 完整 URL）。
     @Published var cleanupURLString: String {
         didSet { UserDefaults.standard.set(cleanupURLString, forKey: Self.cleanupURLKey) }
@@ -137,6 +144,7 @@ final class DictationSettings: ObservableObject {
     private static let cleanupAPIKeyKey = "dictation.cleanup.apiKey"
     private static let cleanupModelKey = "dictation.cleanup.model"
     private static let cleanupSystemPromptKey = "dictation.cleanup.systemPrompt"
+    private static let preventIdleLockKey = "dictation.preventIdleLockWhileRecording"
 
     init() {
         let def = UserDefaults.standard
@@ -156,6 +164,7 @@ final class DictationSettings: ObservableObject {
         cleanupAPIKey = def.string(forKey: Self.cleanupAPIKeyKey) ?? Self.defaultCleanupAPIKey
         cleanupModel = def.string(forKey: Self.cleanupModelKey) ?? Self.defaultCleanupModel
         cleanupSystemPrompt = def.string(forKey: Self.cleanupSystemPromptKey) ?? Self.defaultCleanupSystemPrompt
+        preventIdleLockWhileRecording = def.object(forKey: Self.preventIdleLockKey) as? Bool ?? true
         migrateHotkeyIfNeeded()
         migrateMaxSegmentIfNeeded()
         snapPresetSelections()

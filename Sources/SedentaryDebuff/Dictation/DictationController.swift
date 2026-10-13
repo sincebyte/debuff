@@ -2,6 +2,7 @@ import AppKit
 import AVFoundation
 import Combine
 import Foundation
+import IOKit.pwr_mgt
 
 final class DictationController: ObservableObject {
     enum State: Equatable {
@@ -60,6 +61,20 @@ final class DictationController: ObservableObject {
     private var restoreModeOnUnlock: State = .inactive
     /// 锁屏前已触发「提交」、等其在途转写落地后停麦的标记。
     private var pendingLockStop = false
+    /// 熄屏/锁屏/系统睡眠期间是否保持录音（激活态不被打断）。为 true 时屏幕唤醒后
+    /// 无需恢复会话，原样继续。
+    private var keptRecordingWhileScreenOff = false
+    /// 当前屏幕/系统是否处于熄灭、锁定或睡眠状态。为 true 时健康检查只尝试自愈、不做
+    /// 「放弃并清空缓冲」的破坏性收尾，避免用户离开期间丢掉已说内容。
+    private var screenIsOff = false
+    /// 录音期间持有的进程活跃声明：关闭 App Nap（允许显示器与系统按用户设置照常休眠），
+    /// 使熄屏后进程继续正常录音与转写。
+    private var recordingActivity: NSObjectProtocol?
+    /// 录音期间持有的「防止空闲熄屏/锁屏」电源声明（NoDisplaySleep）。使屏幕在录音时保持
+    /// 点亮，避免长时间不碰鼠标键盘被系统静默锁定；手动锁屏/合盖不受影响。
+    private var displaySleepAssertion: IOPMAssertionID?
+    /// 监听「录音时防止自动锁屏」设置变化：激活期间切换开关即时生效。
+    private var preventIdleLockCancellable: AnyCancellable?
     /// 是否已由本控制器把系统静音（离开激活时据此解除静音）。
     private var didMuteSystemAudio = false
 
@@ -78,6 +93,11 @@ final class DictationController: ObservableObject {
     private var healthTimer: DispatchSourceTimer?
     /// 最近一次引擎 start 成功的时刻，用于区分“刚启动”与“早已僵死”。
     private var engineStartedAt: Date?
+    /// 所选麦克风首次观测到掉线的时刻：持续超过宽限期即判定「麦克风已断开」并收尾落盘。
+    private var micMissingSince: Date?
+    /// 本次会话中「所选麦克风」是否确实在线过：只有在线过再掉线才算断开，避免一开始
+    /// 就回落到系统默认麦克风时被误判收尾。
+    private var usedMicWasAvailable = false
     /// 连续启动/自愈失败次数，成功或观测到数据流时清零，超阈值放弃自愈。
     private var startFailureStreak = 0
     /// 全新开启（从 off 启动）的自动重试标记与目标状态。
@@ -119,6 +139,8 @@ final class DictationController: ObservableObject {
     private static let healthCheckInterval: TimeInterval = 3
     /// 引擎运行后超过该时长仍收不到输入缓冲即判定僵死。
     private static let noBufferStallSeconds: TimeInterval = 6
+    /// 所选麦克风掉线后，持续该时长仍不回来即判定「已断开」并收尾落盘（避免瞬时抖动误判）。
+    private static let micMissingGraceSeconds: TimeInterval = 5
     /// 配置变化通知的合并/抑制窗口：窗口内的连发通知只处理最后一条。
     private static let configChangeCooldown: TimeInterval = 1
     /// 锁屏提交的兜底超时：在途转写/清整理超过该时长仍未落地就强制停麦。
@@ -182,6 +204,13 @@ final class DictationController: ObservableObject {
             }
         }
         applyHotkey()
+        preventIdleLockCancellable = settings.$preventIdleLockWhileRecording
+            .removeDuplicates()
+            .receive(on: engineQueue)
+            .sink { [weak self] _ in
+                guard let self else { return }
+                self.updateRecordingActivity(for: self.currentState)
+            }
         waveformPanel.setActiveOpacity(settings.activeOpacity)
         waveformPanel.setEmptyBufferBehavior(settings.emptyBufferBehavior)
         waveformPanel.setCleanupFused(cleanupReady)
@@ -206,6 +235,8 @@ final class DictationController: ObservableObject {
     deinit {
         healthTimer?.cancel()
         healthTimer = nil
+        preventIdleLockCancellable?.cancel()
+        releaseDisplaySleepAssertion()
         if let engineConfigChangeObserver {
             NotificationCenter.default.removeObserver(engineConfigChangeObserver)
         }
@@ -312,9 +343,8 @@ final class DictationController: ObservableObject {
             self.recorder.setInputDevice(uid: self.settings.microphoneUID)
             guard self.currentState == .active else { return }
             CrashLog.write("[\(Date())] 切换麦克风：\(self.settings.microphoneUID ?? "跟随系统默认")，原地重启引擎\n")
-            self.segmentSamples.removeAll()
-            self.segmentStart = nil
-            self.vad.reset()
+            // 切换前先把当前已采集的音频转写掉，避免用户切换设备时丢掉刚说的话。
+            self.salvageCurrentSegmentBeforeRebuild()
             self.recorder.rebuildEngine()
             self.recorder.resetBufferClock()
             do {
@@ -379,6 +409,8 @@ final class DictationController: ObservableObject {
         lastError = nil
         commitRequested = false
         sendAfterCommit = false
+        micMissingSince = nil
+        usedMicWasAvailable = false
         resetCleanupBookkeeping()
         clearBuffer()
         generation += 1
@@ -508,6 +540,8 @@ final class DictationController: ObservableObject {
         bootNeedsRebuild = false
         startFailureStreak = 0
         engineStartedAt = nil
+        micMissingSince = nil
+        usedMicWasAvailable = false
         shouldStartOnPermission = false
         // 作废排队中的配置变化处理并解除抑制，避免残留状态影响下一轮。
         configChangeToken += 1
@@ -515,16 +549,28 @@ final class DictationController: ObservableObject {
         recorder.resetBufferClock()
     }
 
-    // MARK: - 锁屏 / 解锁
+    // MARK: - 熄屏 / 锁屏 / 唤醒
 
-    /// 锁屏：若正在监听，先把尚未提交的激活语音按一次切换快捷键「提交」落盘
-    /// （语音日记 + 尝试粘贴），等所有在途转写落地后再停麦；没有待提交内容则直接停麦。
+    /// 熄屏、锁屏或系统睡眠：只要此刻正在录音（激活态），就保持录音与转写不中断——
+    /// 不提交、不停麦、不隐藏面板、不清缓冲——等屏幕/系统唤醒后原样继续，避免熄屏时把
+    /// 刚刚说的话整段丢掉。非录音态（待命/空闲/收尾）沿用旧逻辑：提交未落盘内容后停麦，
+    /// 唤醒后再恢复。合盖会让麦克风失效，录音本身可能中断，但已转写的内容保留在缓冲里，
+    /// 唤醒后由健康检查自动续上。
     func handleScreenLock() {
         engineQueue.async { [weak self] in
             guard let self else { return }
-            if self.currentState == .active || self.currentState == .inactive {
+            self.screenIsOff = true
+            if self.currentState == .active {
+                self.keptRecordingWhileScreenOff = true
+                self.shouldRestoreAfterUnlock = false
+                CrashLog.write("[\(Date())] 熄屏/锁屏：录音进行中，保持录音与转写不中断\n")
+                return
+            }
+            // 非录音态：维持旧的「提交后停麦、唤醒恢复」逻辑。
+            self.keptRecordingWhileScreenOff = false
+            if self.currentState == .inactive {
                 self.shouldRestoreAfterUnlock = true
-                self.restoreModeOnUnlock = self.currentState
+                self.restoreModeOnUnlock = .inactive
             } else {
                 self.shouldRestoreAfterUnlock = false
             }
@@ -567,22 +613,44 @@ final class DictationController: ObservableObject {
         }
     }
 
-    /// 解锁：若锁屏前在激活，重新打开麦克风恢复输入；锁屏前是非激活则维持关麦待命，
-    /// 不重新打开麦克风。
+    /// 屏幕/系统唤醒：熄屏期间若录音未中断，直接继续当前会话（引擎若被系统停过则由
+    /// 这里确认并原地续麦）；否则按锁屏前的模式恢复——激活则重新开麦，非激活则维持关麦待命。
     func handleScreenUnlock() {
         engineQueue.async { [weak self] in
             guard let self else { return }
+            self.screenIsOff = false
+            if self.keptRecordingWhileScreenOff {
+                self.keptRecordingWhileScreenOff = false
+                CrashLog.write("[\(Date())] 屏幕唤醒：熄屏期间录音未中断，继续当前会话 state=\(self.currentState)\n")
+                if self.currentState == .active {
+                    self.ensureRecordingAliveAfterWake()
+                    self.setStatus("输入中…")
+                }
+                return
+            }
             guard self.shouldRestoreAfterUnlock else { return }
             self.shouldRestoreAfterUnlock = false
             let mode = self.restoreModeOnUnlock
             if mode == .active {
-                CrashLog.write("[\(Date())] 解锁：恢复监听 mode=active\n")
+                CrashLog.write("[\(Date())] 唤醒：恢复监听 mode=active\n")
                 self.requestStart(initialMode: .active)
             } else {
-                CrashLog.write("[\(Date())] 解锁：锁屏前为非激活，维持关麦待命\n")
+                CrashLog.write("[\(Date())] 唤醒：锁屏前为非激活，维持关麦待命\n")
                 self.restoreInactiveIdle()
             }
         }
+    }
+
+    /// 熄屏/睡眠唤醒后确认录音仍健康：引擎被系统停掉、或已长时间收不到数据时立即原地
+    /// 重建重启，避免要干等一个健康检查周期才续上。
+    private func ensureRecordingAliveAfterWake() {
+        guard currentState == .active else { return }
+        if engineIsProducing() { return }
+        if let started = engineStartedAt,
+           Date().timeIntervalSince(started) <= Self.healthCheckInterval {
+            return
+        }
+        recoverEngineInPlace(reason: "熄屏/睡眠唤醒后确认续麦")
     }
 
     /// 恢复到「非激活待命」：麦克风保持关闭、不显示波形，只把状态置为可再次激活。
@@ -731,7 +799,7 @@ final class DictationController: ObservableObject {
         // 取出并清空缓冲：整段文本先贴到当前光标，随后光波下方的文本区清空，
         // 避免提交后旧内容一直留在面板上。
         let text = takeBufferText()
-        if !text.isEmpty { journal.append(activeText: text) }
+        if !text.isEmpty { journal.commit(activeText: text) }
         let shouldSend = sendAfterCommit
         sendAfterCommit = false
         setState(.inactive)
@@ -784,13 +852,14 @@ final class DictationController: ObservableObject {
         if let suppressUntil = configChangeSuppressUntil, Date() < suppressUntil { return }
         // 无论是否在收音都重建，保证下次 start() 用的是新硬件的格式；但只有激活态才续麦，
         // 非激活态麦克风本就关闭，不能被配置变化通知重新拉起来。
+        // 重建前先把当前已采集的音频转写掉（硬件已变、采样率可能不同），避免切换设备时丢内容。
+        if currentState == .active {
+            salvageCurrentSegmentBeforeRebuild()
+        }
         recorder.rebuildEngine()
         recorder.resetBufferClock()
         guard currentState == .active else { return }
         CrashLog.write("[\(Date())] 输入设备变化：引擎被系统停止，原地续麦 state=\(currentState)\n")
-        segmentSamples.removeAll()
-        segmentStart = nil
-        vad.reset()
         do {
             try recorder.start()
             markEngineStarted()
@@ -820,6 +889,27 @@ final class DictationController: ObservableObject {
            Date().timeIntervalSince(started) <= Self.healthCheckInterval {
             return
         }
+        // 已选定的麦克风掉线（手机走远、连线丢失、设备拔出）：即使系统回落到内置麦克风
+        // 仍在出数据，也按「麦克风断开」处理——给一个短暂宽限后清整理并上屏/落盘。熄屏/
+        // 锁屏期间同样生效：麦克风还在就继续录，麦克风真断了就收尾，不会一直挂着不落盘。
+        if !isUsedMicrophoneAvailable() {
+            // 仅当本次会话中该麦克风确实在线过，掉线才判定为「断开」；若一开就没在线
+            // （已回落到系统默认麦克风），则继续用回落的设备录，不误判收尾。
+            guard usedMicWasAvailable else { return }
+            let since = micMissingSince ?? Date()
+            micMissingSince = since
+            let missing = Date().timeIntervalSince(since)
+            if missing >= Self.micMissingGraceSeconds {
+                CrashLog.write(String(
+                    format: "[%@] 所选麦克风已断开 %.0f 秒，收尾并落盘\n", "\(Date())", missing
+                ))
+                micMissingSince = nil
+                stopAfterHardwareFailure()
+            }
+            return
+        }
+        usedMicWasAvailable = true
+        micMissingSince = nil
         if engineIsProducing() {
             // 数据正常流入：清空失败计数，保持健康。
             if startFailureStreak != 0 { startFailureStreak = 0 }
@@ -827,6 +917,14 @@ final class DictationController: ObservableObject {
         }
         startFailureStreak += 1
         if startFailureStreak >= Self.maxRecoveryStreak {
+            guard !screenIsOff else {
+                // 熄屏/锁屏/合盖期间麦克风可能暂时不可用：不清缓冲、不放弃，压低计数后
+                // 继续自愈，等屏幕唤醒或设备恢复后自动续上，避免离开期间丢掉已说内容。
+                startFailureStreak = Self.maxRecoveryStreak - 1
+                CrashLog.write("[\(Date())] 熄屏期间麦克风暂不可用，保持自愈不放弃\n")
+                recoverEngineInPlace(reason: "熄屏期间麦克风暂不可用")
+                return
+            }
             CrashLog.write("[\(Date())] 麦克风持续不可用（连续 \(startFailureStreak) 次），停止监听避免空转\n")
             stopAfterHardwareFailure()
             return
@@ -849,14 +947,24 @@ final class DictationController: ObservableObject {
             && Date().timeIntervalSince(last) <= Self.noBufferStallSeconds
     }
 
+    /// 本次会话使用的麦克风是否仍在线：选定设备时看该设备是否还在（掉线即视为断开）；
+    /// 跟随系统默认时只要系统还有默认输入即视为在线。用于区分「熄屏/暂时没数据」与
+    /// 「麦克风真的断开了」——后者需要收尾落盘。
+    private func isUsedMicrophoneAvailable() -> Bool {
+        if let uid = settings.microphoneUID, !uid.isEmpty {
+            return DictationMicrophone.inputDeviceID(forUID: uid) != nil
+        }
+        return DictationMicrophone.defaultInputDeviceUID() != nil
+    }
+
     /// 监听中原地恢复引擎（保留当前激活/非激活状态与波形面板）。失败时交由下一轮
     /// 健康检查继续，不打断现有状态。
     private func recoverEngineInPlace(reason: String) {
         guard currentState == .active else { return }
         CrashLog.write("[\(Date())] 原地重建重启引擎：\(reason) state=\(currentState)\n")
-        segmentSamples.removeAll()
-        segmentStart = nil
-        vad.reset()
+        // 重建会让 inputNode 重新绑定硬件、采样率可能变化，旧样本不能再拼接；重建前先把
+        // 已采集的这段音频送去转写，避免设备掉线/切换时把刚说的话整段丢掉。
+        salvageCurrentSegmentBeforeRebuild()
         // 丢弃旧引擎（stop 并摘 tap）后重建，start() 会切默认输入并等所选设备真正就绪；
         // 唤醒只做一次真实切换、不来回抖动，避免把互联设备（iPhone 麦克风）带进静音坏态。
         recorder.rebuildEngine()
@@ -871,32 +979,46 @@ final class DictationController: ObservableObject {
         }
     }
 
-    /// 长时间无法获取麦克风数据时收尾：复位并停到 off，给出可操作的提示。
-    private func stopAfterHardwareFailure() {
-        resetEngineBookkeeping()
-        recorder.stop()
-        segmentSamples.removeAll()
+    /// 重建/切换引擎前，把当前已采集但尚未转写的音频送去转写并清空，避免设备切换或掉线
+    /// 时把刚说过的内容丢掉；近乎静音的残留段直接丢弃，省一次无意义的网络往返。
+    private func salvageCurrentSegmentBeforeRebuild() {
+        if !segmentSamples.isEmpty {
+            flushFinalSegment()
+        }
         segmentStart = nil
         vad.reset()
-        isFlushing = false
-        discardPendingOnStop = true
-        generation += 1
-        pending = 0
-        lastError = nil
+    }
+
+    /// 麦克风断开（被拔掉/手机走远/连线丢失）时收尾：先把已采集的音频与在途转写收尾，
+    /// 调用一次清整理（DeepSeek），再把整段内容粘贴上屏并写入语音日记，最后停止。
+    /// 与按一次切换快捷键提交等价——麦克风既然已经没了，就把已经说过的内容完整落地。
+    private func stopAfterHardwareFailure() {
+        guard currentState == .active else {
+            resetEngineBookkeeping()
+            recorder.stop()
+            setState(.off)
+            return
+        }
+        CrashLog.write("[\(Date())] 麦克风已断开：清整理并上屏/落盘已录音内容后停止\n")
+        resetEngineBookkeeping()
+        // 麦克风已不可用，先停麦；随后走收尾转写流程，不再重新开麦。
+        recorder.stop()
         commitRequested = false
         sendAfterCommit = false
-        resetCleanupBookkeeping()
-        clearBuffer()
-        setState(.off)
-        setStatus("麦克风不可用，语音输入已停止（可稍后重新开始）")
+        // 保留在途转写结果（不外弃），让它们落地后一起整理、上屏、写日记。
+        discardPendingOnStop = false
+        isFlushing = true
+        lastError = "麦克风已断开"
+        setState(.flushing)
+        setStatus("麦克风已断开，正在整理并保存…")
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
-            self.waveformPanel.setTranscribing(false)
-            self.waveformPanel.setCleaning(false)
-            self.waveformPanel.setActive(false)
             self.waveformPanel.setListening(false)
-            self.waveformPanel.hide()
+            self.waveformPanel.setActive(false)
         }
+        // 强制转写当前残留段（若近乎静音会跳过）；随后等在途转写返回，再清整理+上屏+写日记。
+        flushFinalSegment()
+        finishIfNeeded()
     }
 
     // MARK: - 音频处理
@@ -1085,21 +1207,26 @@ final class DictationController: ObservableObject {
         guard !line.isEmpty else { return }
         bufferText += line
         updateBufferUI()
+        // 每段转写落地即把当前未提交整段写入草稿：断电/崩溃/强杀后，下次启动可恢复，
+        // 损失最多只有最后一段（未被转写的音频）。
+        journal.updateDraft(bufferText)
     }
 
     /// 取出并清空缓冲文本：各段直接拼接后整段粘贴。段间不插入换行——换行完全由
     /// 大模型在整理结果里给出，避免把本该连成一行的文字按语音段切开。
+    /// 草稿由调用方随后的 journal.commit 负责清除（见 finishCommit/finishIfNeeded）。
     private func takeBufferText() -> String {
         let text = bufferText
-        clearBuffer()
+        clearBuffer(keepDraft: true)
         return text
     }
 
-    private func clearBuffer() {
+    private func clearBuffer(keepDraft: Bool = false) {
         bufferText = ""
         finalCleanupDone = false
         // 缓冲已清空：作废在途清整理，避免过期结果落回新缓冲。
         resetCleanupBookkeeping()
+        if !keepDraft { journal.clearDraft() }
         updateBufferUI()
     }
 
@@ -1320,11 +1447,11 @@ final class DictationController: ObservableObject {
 
     private func finishIfNeeded() {
         guard isFlushing, pending == 0 else { return }
-        // 停止引擎时同样先对整段缓冲做一次清整理；请求在途则等回调再来。
+        // 停止引擎时同样先对整段缓冲做一次清整理（DeepSeek）；请求在途则等回调再来。
         guard !startFinalCleanupIfNeeded() else { return }
         // 把缓冲里还没提交的内容整段落盘，避免没按键就停麦导致白说。
         let text = takeBufferText()
-        if !text.isEmpty { journal.append(activeText: text) }
+        if !text.isEmpty { journal.commit(activeText: text) }
         isFlushing = false
         resetCleanupBookkeeping()
         setState(.off)
@@ -1395,6 +1522,7 @@ final class DictationController: ObservableObject {
         guard currentState != newState else { return }
         let previousState = currentState
         currentState = newState
+        updateRecordingActivity(for: newState)
         updateSystemMute(from: previousState, to: newState)
         // 离开激活态即撤销切段预警，避免残留的灰点提示。
         if newState != .active {
@@ -1404,6 +1532,58 @@ final class DictationController: ObservableObject {
         DispatchQueue.main.async { [weak self] in
             self?.state = value
         }
+    }
+
+    /// 录音期间持有进程活跃声明：关闭 App Nap，保证熄屏后录音与转写继续正常进行；
+    /// 使用「允许空闲系统休眠」的选项，不阻止显示器与系统按用户设置照常休眠。
+    /// 同时按设置持有/释放「防止空闲熄屏/锁屏」声明，让录音时屏幕不被系统静默锁定。
+    private func updateRecordingActivity(for state: State) {
+        if state == .active {
+            if recordingActivity == nil {
+                recordingActivity = ProcessInfo.processInfo.beginActivity(
+                    options: [.userInitiatedAllowingIdleSystemSleep],
+                    reason: "语音输入进行中：保持进程活跃"
+                )
+            }
+        } else if let token = recordingActivity {
+            ProcessInfo.processInfo.endActivity(token)
+            recordingActivity = nil
+        }
+
+        // 防空闲熄屏/锁屏声明：仅录音且设置开启时持有。
+        if state == .active, settings.preventIdleLockWhileRecording {
+            acquireDisplaySleepAssertionIfNeeded()
+        } else {
+            releaseDisplaySleepAssertion()
+        }
+    }
+
+    /// 持有「防止空闲熄屏/锁屏」电源声明：录音时让屏幕保持点亮，系统不会因为长时间
+    /// 没有鼠标/键盘活动而自动进入屏保并锁定。手动锁屏、合盖、菜单里的睡眠属于用户
+    /// 主动动作，不受此声明影响，仍照常生效。创建失败只记日志，不影响录音本身。
+    private func acquireDisplaySleepAssertionIfNeeded() {
+        guard displaySleepAssertion == nil else { return }
+        var id: IOPMAssertionID = 0
+        let reason = "语音输入进行中：保持屏幕点亮，避免空闲自动锁屏" as CFString
+        let result = IOPMAssertionCreateWithName(
+            kIOPMAssertPreventUserIdleDisplaySleep as CFString,
+            IOPMAssertionLevel(kIOPMAssertionLevelOn),
+            reason,
+            &id
+        )
+        if result == kIOReturnSuccess {
+            displaySleepAssertion = id
+            CrashLog.write("[\(Date())] 录音中：已阻止空闲熄屏/锁屏（PreventUserIdleDisplaySleep）\n")
+        } else {
+            CrashLog.write("[\(Date())] 录音中：创建 PreventUserIdleDisplaySleep 声明失败 result=\(result)\n")
+        }
+    }
+
+    private func releaseDisplaySleepAssertion() {
+        guard let id = displaySleepAssertion else { return }
+        IOPMAssertionRelease(id)
+        displaySleepAssertion = nil
+        CrashLog.write("[\(Date())] 已释放 NoDisplaySleep 声明\n")
     }
 
     /// 系统静音联动：进入激活时静音默认输出，离开激活时解除静音。
@@ -1449,6 +1629,7 @@ final class DictationController: ObservableObject {
             self.resetEngineBookkeeping()
             self.recorder.stop()
             self.restoreSystemMute()
+            self.releaseDisplaySleepAssertion()
             semaphore.signal()
         }
         _ = semaphore.wait(timeout: .now() + timeout)

@@ -134,6 +134,19 @@ The status bar menu adds a "Voice input" section: default hotkey **⌥⇧F2** (c
 3. Each segment is transcribed by the local STT service and pasted immediately at the **current cursor position** ("live / paste as you speak" mode, on by default).
 4. Press the hotkey again to stop; the final un-pasted segment is transcribed and pasted, and the waveform indicator disappears.
 
+**Screen off / lock while recording**
+
+If a recording session is active and the display sleeps, the screen locks, or you close the lid, the app does **not** stop and does **not** close the microphone: as long as the microphone stays connected it keeps recording and transcribing in the background, so when the screen wakes everything continues as if it was never interrupted. Only when the selected microphone actually disconnects (unplugged, phone out of range, Bluetooth/Continuity link lost) does the app end the session gracefully: it finishes transcribing what was captured, runs one cleanup pass (DeepSeek), then pastes the whole text and writes it to the voice journal. When voice input is not recording (idle/standby), screen off/lock behaves as before: pending text is committed and the microphone is stopped, then restored on wake.
+
+**Don't lock the screen while recording** (menu "Voice input → Settings → Don't auto-lock while recording", on by default)
+
+While recording is active, the app holds a `PreventUserIdleDisplaySleep` power assertion, so the screen stays lit and the system does **not** silently lock itself just because the mouse and keyboard have been idle for a while — you can keep talking without being interrupted. This only affects the *idle* path: a manual lock (⌃⌘Q, menu → Lock Screen), closing the lid, and sleep from the menu are deliberate actions and still take effect. Turn the option off to let the system follow your normal display-off/lock timers.
+
+**Never lose what you already said**
+
+- Every time a segment is transcribed, the whole uncommitted buffer is written to a draft file (`.pending-voice.txt` inside the journal folder). If the app crashes, is force-quit, or the machine loses power, the draft is appended to the voice journal on the next launch, so at most the final un-transcribed segment is lost.
+
+
 **STT service URL**
 
 - Configurable under the menu "Voice input → Settings → STT service URL"; a custom URL is supported (OpenAI-compatible `POST /v1/audio/transcriptions`, multipart `file` field, returning `{"text": "..."}`). Default: `http://127.0.0.1:8001/v1/audio/transcriptions`.
