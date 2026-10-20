@@ -6,7 +6,7 @@ enum DictationHotKey {
     static let fixedEndFlags: UInt32 = 0
     static var fixedEndLabel: String { label(keyCode: fixedEndKeyCode, flags: fixedEndFlags) }
 
-    /// 固定的 Home 键（kVK_Home），常驻注册，用于清空尚未提交的缓冲文本。
+    /// 固定的 Home 键（kVK_Home），常驻注册：清空尚未提交的缓冲文本并关闭（回到非激活待命）。
     static let fixedHomeKeyCode: UInt32 = 115
     static let fixedHomeFlags: UInt32 = 0
     static var fixedHomeLabel: String { label(keyCode: fixedHomeKeyCode, flags: fixedHomeFlags) }
@@ -32,7 +32,7 @@ enum DictationHotKey {
         setSlot(fixedEndSlot, keyCode: fixedEndKeyCode, flags: fixedEndFlags, onPress: onPress)
     }
 
-    /// 注册固定的 Home 键（清空缓冲）。重复调用会先注销旧注册再重新注册。
+    /// 注册固定的 Home 键（清空缓冲并关闭）。重复调用会先注销旧注册再重新注册。
     @discardableResult
     static func registerFixedHome(onPress: @escaping () -> Void) -> Bool {
         setSlot(fixedHomeSlot, keyCode: fixedHomeKeyCode, flags: fixedHomeFlags, onPress: onPress)

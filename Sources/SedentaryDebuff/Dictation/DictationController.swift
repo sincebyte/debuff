@@ -278,7 +278,7 @@ final class DictationController: ObservableObject {
         DictationHotKey.registerFixedEnd { [weak self] in
             self?.toggle()
         }
-        // 固定 Home 键：清空尚未提交的缓冲文本。
+        // 固定 Home 键：清空尚未提交的缓冲文本并关闭（回到非激活待命）。
         DictationHotKey.registerFixedHome { [weak self] in
             self?.clearBufferedText()
         }
@@ -316,10 +316,50 @@ final class DictationController: ObservableObject {
         }
     }
 
-    /// 固定 Home 键：清空尚未提交的缓冲文本。
+    /// 固定 Home 键：清空尚未提交的缓冲文本，并把控件直接关闭（回到非激活待命）。
     func clearBufferedText() {
         engineQueue.async { [weak self] in
-            self?.performClearCommand()
+            self?.discardAndDeactivate()
+        }
+    }
+
+    /// Home 键的「丢弃并关闭」：先清空已转写的文字，再回到非激活待命。
+    /// 刻意绕开提交/收尾链路——不把残留音频送去 ASR、不发起清整理、不粘贴任何内容；
+    /// 在途的转写与清整理按代数/令牌作废，回调回来也不会再改缓冲或触发后续流程。
+    private func discardAndDeactivate() {
+        CrashLog.write("[\(Date())] Home：清空缓冲并关闭 state=\(currentState) len=\(bufferText.count)\n")
+        guard currentState == .active || currentState == .flushing else {
+            // 非激活/空闲：没有可关闭的会话，只清缓冲（草稿一并删掉）。
+            clearBuffer()
+            return
+        }
+        // 第一步：清空已经转写出来的文字。
+        clearBuffer()
+        // 第二步：作废在途请求，并复位音频/提交簿记，保证不会再触发 ASR 与清整理。
+        generation += 1
+        resetCleanupBookkeeping()
+        resetEngineBookkeeping()
+        segmentSamples.removeAll()
+        segmentStart = nil
+        pending = 0
+        isFlushing = false
+        discardPendingOnStop = true
+        pendingLockStop = false
+        commitRequested = false
+        sendAfterCommit = false
+        lastError = nil
+        vad.reset()
+        // 第三步：先切非激活态再停引擎（顺序不能反：配置变化通知看到激活态会把麦克风
+        // 重新拉起来）。setState 同时负责解除系统静音、App Nap 与防熄屏声明。
+        setState(.inactive)
+        setStatus("待命（按 \(hotkeyLabel) 重新激活）")
+        recorder.stop()
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.waveformPanel.setTranscribing(false)
+            self.waveformPanel.setCleaning(false)
+            self.waveformPanel.setListening(false)
+            self.waveformPanel.setActive(false)
         }
     }
 
