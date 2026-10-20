@@ -42,6 +42,9 @@ final class DebuffStatusBarController: NSObject, NSMenuDelegate {
 
     private var updateTimer: AnyCancellable?
     private var dataCancellables = Set<AnyCancellable>()
+    /// 根菜单是否展开。菜单关闭时状态项只有图标、没有文字，刷新标题没有意义；
+    /// 而 `refreshDictationItems()` 里要枚举 CoreAudio 设备、重算统计，空转很贵。
+    private var isRootMenuOpen = false
 
     init(services: AppServices) {
         self.services = services
@@ -745,11 +748,16 @@ final class DebuffStatusBarController: NSObject, NSMenuDelegate {
 
     func menuWillOpen(_ menu: NSMenu) {
         if menu == rootMenu {
+            isRootMenuOpen = true
             refreshAllVisibleStrings()
         } else if menu == micMenu {
             // 设备可随时插拔：展开麦克风子菜单前重建一次设备列表与勾选状态。
             rebuildMicMenu()
         }
+    }
+
+    func menuDidClose(_ menu: NSMenu) {
+        if menu == rootMenu { isRootMenuOpen = false }
     }
 
     private func refreshAllVisibleStrings() {
@@ -785,11 +793,14 @@ final class DebuffStatusBarController: NSObject, NSMenuDelegate {
 
     private func bindData() {
         // 定时更新状态行（不替换 rootMenu 结构；子菜单在展开时也不会因 title 被覆盖而关闭）
+        // 只在菜单展开时刷新：关闭状态下这些文字用户看不到，而每 0.5 秒重算一遍
+        // （枚举音频设备、读统计）会持续占 CPU。
         updateTimer = Timer.publish(every: 0.5, on: .main, in: .common)
             .autoconnect()
             .sink { [weak self] _ in
-                self?.refreshStatusLineItems()
-                self?.refreshDictationItems()
+                guard let self, self.isRootMenuOpen else { return }
+                self.refreshStatusLineItems()
+                self.refreshDictationItems()
             }
         // 监听阈值（例如 HUD 里清除导致 session 等），父项/对勾
         services.monitor.$thresholdMinutes

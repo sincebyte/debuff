@@ -4,7 +4,7 @@ import Combine
 import Foundation
 
 /// 飞书未读：自收到未读/新消息起计时，并在 HUD 显示未读（读 Dock 角标，与微信一致）。
-/// 每 2 秒轮询角标；无未读时隐藏浮窗、清空角标与计时时长。
+/// 飞书没在运行时跳过轮询；正常运行时每 3 秒轮询角标；无未读时隐藏浮窗、清空角标与计时时长。
 final class FeishuDebuffMonitor: ObservableObject {
     @Published private(set) var feishuDebuffVisible: Bool = false
     /// 本次 debuff 在 HUD 上变为可见的时刻，用于与微信等并排时「新出现的靠左」排序
@@ -40,17 +40,43 @@ final class FeishuDebuffMonitor: ObservableObject {
     }
 
     private func startPolling() {
-        // 与 Dock 角标同步，未读消失则关闭 HUD 并清空数值
-        poll = Timer.publish(every: 2, on: .main, in: .common)
+        // 与 Dock 角标同步，未读消失则关闭 HUD 并清空数值。
+        // 每次轮询都要遍历 Dock 的辅助功能树（跨进程 AX 调用），3 秒足够跟上未读变化。
+        poll = Timer.publish(every: 3, on: .main, in: .common)
             .autoconnect()
             .sink { [weak self] _ in
                 self?.pollTick()
             }
     }
 
+    private static let feishuBundleIDs: Set<String> = [
+        "com.electron.lark", "com.bytedance.feishu", "com.bytedance.lark",
+        "com.larksuite.feishu", "com.larksuite.lark",
+    ]
+    private static let feishuNames: Set<String> = ["feishu", "lark", "飞书", "lark 移动办公"]
+
+    /// Dock 角标只属于正在运行的应用：没开飞书时 Dock 上不可能有角标，
+    /// 直接跳过整棵 Dock 辅助功能树的遍历。bundle id + 应用名双重判断，
+    /// 避免个别发行版 bundle id 不同被误判成「没开」。
+    private static func isFeishuRunning() -> Bool {
+        NSWorkspace.shared.runningApplications.contains { app in
+            if let id = app.bundleIdentifier?.lowercased(), feishuBundleIDs.contains(id) {
+                return true
+            }
+            let name = app.localizedName?.lowercased() ?? ""
+            return feishuNames.contains(name)
+        }
+    }
+
     private func pollTick() {
-        if !AXIsProcessTrusted() {
+        guard Self.isFeishuRunning() else {
+            // 飞书已退出：角标随之消失，按「无未读」收尾。
+            applyBadgeChange(nil)
+            return
+        }
+        guard AXIsProcessTrusted() else {
             requestAXIfNeeded()
+            return
         }
         let label = FeishuDockBadgeReader.readStatusLabel()
         let normalized = normalize(label)

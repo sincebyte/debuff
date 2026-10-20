@@ -17,7 +17,7 @@ struct FeishuDebuffHUDView: View {
 
     var body: some View {
         if feishu.showFeishuDebuff {
-            TimelineView(.periodic(from: .now, by: 0.25)) { _ in
+            TimelineView(.periodic(from: .now, by: 1)) { _ in
                 hudContent
             }
         } else {
@@ -48,7 +48,7 @@ struct FeishuDebuffHUDView: View {
     @ViewBuilder
     private var feishuIcon: some View {
         if let path = feishu.feishuCustomIconPath,
-           let ns = NSImage(contentsOfFile: path) {
+           let ns = BundledAssets.customImage(atPath: path) {
             Image(nsImage: ns)
                 .resizable()
                 .scaledToFill()

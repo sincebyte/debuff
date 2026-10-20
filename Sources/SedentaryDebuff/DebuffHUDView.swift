@@ -19,7 +19,9 @@ struct DebuffHUDView: View {
     var body: some View {
         Group {
             if monitor.showDebuff {
-                TimelineView(.periodic(from: .now, by: 0.25)) { _ in
+                // 只显示到 0.1 分钟（6 秒一跳），1 秒刷新足够；0.25 秒一次会让整块
+                // SwiftUI HUD 每秒重排 4 次，空闲时纯耗 CPU。
+                TimelineView(.periodic(from: .now, by: 1)) { _ in
                     hudContent
                 }
             } else {
@@ -61,7 +63,7 @@ struct DebuffHUDView: View {
     @ViewBuilder
     private var iconView: some View {
         if let path = monitor.customIconPath,
-           let ns = NSImage(contentsOfFile: path) {
+           let ns = BundledAssets.customImage(atPath: path) {
             Image(nsImage: ns)
                 .resizable()
                 .scaledToFill()

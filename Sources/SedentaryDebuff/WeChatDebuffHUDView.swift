@@ -17,7 +17,7 @@ struct WeChatDebuffHUDView: View {
 
     var body: some View {
         if weChat.showWeChatDebuff {
-            TimelineView(.periodic(from: .now, by: 0.25)) { _ in
+            TimelineView(.periodic(from: .now, by: 1)) { _ in
                 hudContent
             }
         } else {
@@ -48,7 +48,7 @@ struct WeChatDebuffHUDView: View {
     @ViewBuilder
     private var weChatIcon: some View {
         if let path = weChat.weChatCustomIconPath,
-           let ns = NSImage(contentsOfFile: path) {
+           let ns = BundledAssets.customImage(atPath: path) {
             Image(nsImage: ns)
                 .resizable()
                 .scaledToFill()

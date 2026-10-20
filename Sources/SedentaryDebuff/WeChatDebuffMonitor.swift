@@ -4,6 +4,7 @@ import Combine
 import Foundation
 
 /// 微信未读：从收到未读/新消息起计时并立即在 HUD 展示（读 Dock 角标）。
+/// 微信没在运行时跳过轮询；正常运行时每 3 秒读一次。
 final class WeChatDebuffMonitor: ObservableObject {
     @Published private(set) var weChatDebuffVisible: Bool = false
     /// 本次 debuff 在 HUD 上变为可见的时刻，用于与飞书等并排时「新出现的靠左」排序
@@ -37,17 +38,42 @@ final class WeChatDebuffMonitor: ObservableObject {
     }
 
     private func startPolling() {
-        // 与 Dock 角标同步，未读为 0 时隐藏并清零计时
-        poll = Timer.publish(every: 2, on: .main, in: .common)
+        // 与 Dock 角标同步，未读为 0 时隐藏并清零计时。
+        // 每次轮询都要遍历 Dock 的辅助功能树（跨进程 AX 调用），3 秒足够跟上未读变化。
+        poll = Timer.publish(every: 3, on: .main, in: .common)
             .autoconnect()
             .sink { [weak self] _ in
                 self?.pollTick()
             }
     }
 
+    private static let weChatBundleIDs: Set<String> = [
+        "com.tencent.xinwechat", "com.tencent.wechat",
+    ]
+    private static let weChatNames: Set<String> = ["wechat", "微信"]
+
+    /// Dock 角标只属于正在运行的应用：没开微信时 Dock 上不可能有角标，
+    /// 直接跳过整棵 Dock 辅助功能树的遍历。bundle id + 应用名双重判断，
+    /// 避免个别发行版 bundle id 不同被误判成「没开」。
+    private static func isWeChatRunning() -> Bool {
+        NSWorkspace.shared.runningApplications.contains { app in
+            if let id = app.bundleIdentifier?.lowercased(), weChatBundleIDs.contains(id) {
+                return true
+            }
+            let name = app.localizedName?.lowercased() ?? ""
+            return weChatNames.contains(name)
+        }
+    }
+
     private func pollTick() {
-        if !AXIsProcessTrusted() {
+        guard Self.isWeChatRunning() else {
+            // 微信已退出：角标随之消失，按「无未读」收尾。
+            applyBadgeChange(nil)
+            return
+        }
+        guard AXIsProcessTrusted() else {
             requestAXIfNeeded()
+            return
         }
         let label = WeChatDockBadgeReader.readStatusLabel()
         let normalized = normalize(label)

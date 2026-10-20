@@ -20,15 +20,21 @@ enum BundledAssets {
         _ = CTFontManagerRegisterFontsForURL(url as CFURL, .process, &error)
     }
 
-    static func borderImage() -> NSImage {
+    // 下面这些图都在 HUD 的 SwiftUI body 里取用，而 body 会随计时刷新反复求值。
+    // `NSImage(contentsOf:)` 每次都做一次 bundle 查找 + 读盘 + PNG 解码（采样里
+    // 空闲时占到近一成 CPU），所以统一在这里解码一次并复用。
+
+    private static let border: NSImage = {
         if let url = bundle.url(forResource: "border", withExtension: "png"),
            let img = NSImage(contentsOf: url) {
             return img
         }
         return NSImage(size: NSSize(width: 68, height: 68))
-    }
+    }()
 
-    static func defaultDebuffIcon() -> NSImage {
+    static func borderImage() -> NSImage { border }
+
+    private static let debuffIcon: NSImage = {
         if let url = bundle.url(forResource: "sentinel-juggernautstance-128", withExtension: "png"),
            let img = NSImage(contentsOf: url) {
             return img
@@ -37,10 +43,12 @@ enum BundledAssets {
             return sys
         }
         return NSImage(size: NSSize(width: 64, height: 64))
-    }
+    }()
+
+    static func defaultDebuffIcon() -> NSImage { debuffIcon }
 
     /// 微信未读 debuff 图标（Terraria Silenced）
-    static func weChatDebuffIcon() -> NSImage {
+    private static let weChatIcon: NSImage = {
         if let url = bundle.url(forResource: "wechat", withExtension: "png"),
            let img = NSImage(contentsOf: url) {
             return img
@@ -53,10 +61,12 @@ enum BundledAssets {
             return sys
         }
         return NSImage(size: NSSize(width: 32, height: 32))
-    }
+    }()
+
+    static func weChatDebuffIcon() -> NSImage { weChatIcon }
 
     /// 飞书未读 debuff 默认图标
-    static func feishuDebuffIcon() -> NSImage {
+    private static let feishuIcon: NSImage = {
         if let url = bundle.url(forResource: "飞书", withExtension: "png"),
            let img = NSImage(contentsOf: url) {
             return img
@@ -68,10 +78,12 @@ enum BundledAssets {
             return sys
         }
         return NSImage(size: NSSize(width: 32, height: 32))
-    }
+    }()
+
+    static func feishuDebuffIcon() -> NSImage { feishuIcon }
 
     /// 菜单栏状态项图标（源图：`App/appicon.png`，经 SPM 打入包内）
-    static func menuBarIcon() -> NSImage {
+    private static let statusBarIcon: NSImage = {
         guard let url = bundle.url(forResource: "appicon", withExtension: "png"),
               let original = NSImage(contentsOf: url) else {
             if let sys = NSImage(systemSymbolName: "hourglass", accessibilityDescription: nil) {
@@ -89,5 +101,25 @@ enum BundledAssets {
             )
             return true
         }
+    }()
+
+    static func menuBarIcon() -> NSImage { statusBarIcon }
+
+    /// 用户自选图标（路径来自设置）：同一路径 + 同一修改时间只解码一次。
+    /// 只应在主线程调用（SwiftUI body / 面板布局）。
+    private static var customImages: [String: (mtime: Date?, image: NSImage)] = [:]
+
+    static func customImage(atPath path: String?) -> NSImage? {
+        guard let path, !path.isEmpty else { return nil }
+        let mtime = (try? FileManager.default.attributesOfItem(atPath: path))?[.modificationDate] as? Date
+        if let cached = customImages[path], cached.mtime == mtime {
+            return cached.image
+        }
+        guard let image = NSImage(contentsOfFile: path) else {
+            customImages[path] = nil
+            return nil
+        }
+        customImages[path] = (mtime, image)
+        return image
     }
 }
