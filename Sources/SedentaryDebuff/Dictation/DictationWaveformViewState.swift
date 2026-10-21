@@ -34,6 +34,8 @@ final class DictationWaveformViewState: ObservableObject {
     /// 进度条始终是一条自然曲线：阶段切换只改变推进速度，不重置也不跳变。
     var showsLoading: Bool { isTranscribing || isCleaning }
     @Published var activeOpacity: Double = 1.0
+    /// 波形敏感度（0.1…1.0）：0.5 为标准，0.5→1 是增强区间（越小/越大的声音都能顶满）。
+    @Published var sensitivity: Double = DictationSettings.defaultWaveformSensitivity
 
     /// 缓冲文本：激活期间累积，提交时整段粘贴到当前光标后清空。内容为拼接后的整段文本
     /// （换行由大模型决定），通常只有一个元素，供滚动区展示与自动滚底。

@@ -212,6 +212,7 @@ final class DictationController: ObservableObject {
                 self.updateRecordingActivity(for: self.currentState)
             }
         waveformPanel.setActiveOpacity(settings.activeOpacity)
+        waveformPanel.setSensitivity(settings.waveformSensitivity)
         waveformPanel.setEmptyBufferBehavior(settings.emptyBufferBehavior)
         waveformPanel.setCleanupFused(cleanupReady)
         waveformPanel.onWidthChange = { [weak self] width in
@@ -366,6 +367,11 @@ final class DictationController: ObservableObject {
     /// 菜单更改「空文本时」处理方式后调用：立即刷新面板占位/收起。
     func applyEmptyBufferBehavior() {
         waveformPanel.setEmptyBufferBehavior(settings.emptyBufferBehavior)
+    }
+
+    /// 菜单调整「波形敏感度」后调用：立即按新增益重绘音柱。
+    func applyWaveformSensitivity() {
+        waveformPanel.setSensitivity(settings.waveformSensitivity)
     }
 
     /// 菜单更改「清整理」配置后调用：刷新进度条两段式融合。清整理只在提交/停止时整段执行，

@@ -138,6 +138,13 @@ The status bar menu adds a "Voice input" section: default hotkey **⌥⇧F2** (c
 
 If a recording session is active and the display sleeps, the screen locks, or you close the lid, the app does **not** stop and does **not** close the microphone: as long as the microphone stays connected it keeps recording and transcribing in the background, so when the screen wakes everything continues as if it was never interrupted. Only when the selected microphone actually disconnects (unplugged, phone out of range, Bluetooth/Continuity link lost) does the app end the session gracefully: it finishes transcribing what was captured, runs one cleanup pass (DeepSeek), then pastes the whole text and writes it to the voice journal. When voice input is not recording (idle/standby), screen off/lock behaves as before: pending text is committed and the microphone is stopped, then restored on wake.
 
+**Waveform sensitivity** (menu "Voice input → Settings → Waveform sensitivity", range 0.1–1, default 0.5)
+
+- **0.5 = standard**: identical to the previous look (gain factor of 1).
+- **0.5 → 1 = boost range**: up to about 10× gain; the closer to 1, the more even a quiet voice fills the bars — useful in a quiet room or with a low-output microphone.
+- **0.5 → 0.1 = reduce range**: you have to speak louder before the bars rise — useful in noisy rooms or when the microphone gain is too high.
+- It applies immediately while dragging and is saved automatically.
+
 **Don't lock the screen while recording** (menu "Voice input → Settings → Don't auto-lock while recording", on by default)
 
 While recording is active, the app holds a `PreventUserIdleDisplaySleep` power assertion, so the screen stays lit and the system does **not** silently lock itself just because the mouse and keyboard have been idle for a while — you can keep talking without being interrupted. This only affects the *idle* path: a manual lock (⌃⌘Q, menu → Lock Screen), closing the lid, and sleep from the menu are deliberate actions and still take effect. Turn the option off to let the system follow your normal display-off/lock timers.

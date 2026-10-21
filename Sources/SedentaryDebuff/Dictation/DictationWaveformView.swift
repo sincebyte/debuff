@@ -16,7 +16,9 @@ struct DictationWaveformView: View {
     @State private var idleTicks = 0
 
     private let displaySeconds = 0.6
-    private let gain: Float = 15.0
+    /// 默认满幅增益：音柱高度 = 峰值 × baseGain × 敏感度倍率。
+    /// 敏感度 0.5 时倍率为 1（与旧版一致）；0.5→1 是增强区间，最多约 10 倍。
+    private let baseGain: Float = 15.0
     private let noiseFloor: Float = 0.001
     /// 非激活(待命)状态的整体透明度：控件不再隐藏，常驻可见。
     private let standbyOpacity = 0.6
@@ -268,6 +270,7 @@ struct DictationWaveformView: View {
     private func amplitudeBars(_ samples: [Float], count: Int) -> [Float] {
         var bars = [Float](repeating: 0, count: count)
         let bucket = max(1, samples.count / count)
+        let gain = baseGain * Float(DictationSettings.waveformGainFactor(state.sensitivity))
         for i in 0..<count {
             let lo = i * bucket
             let hi = min(lo + bucket, samples.count)

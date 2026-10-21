@@ -39,6 +39,8 @@ final class DebuffStatusBarController: NSObject, NSMenuDelegate {
     private var micMenu: NSMenu!
     private var pauseValueButtons: [NSButton] = []
     private var maxSegmentValueButtons: [NSButton] = []
+    private var waveformSensitivitySlider: NSSlider!
+    private var waveformSensitivityValueLabel: NSTextField!
 
     private var updateTimer: AnyCancellable?
     private var dataCancellables = Set<AnyCancellable>()
@@ -238,6 +240,20 @@ final class DebuffStatusBarController: NSObject, NSMenuDelegate {
             settingsMenu.addItem(row.item)
             maxSegmentValueButtons.append(row.button)
         }
+
+        settingsMenu.addItem(NSMenuItem.separator())
+        settingsMenu.addItem(subHeader("波形敏感度"))
+        let sensitivityRow = sliderRow(
+            value: s.waveformSensitivity,
+            range: DictationSettings.waveformSensitivityRange,
+            step: DictationSettings.waveformSensitivityStep,
+            valueText: Self.sensitivityText(s.waveformSensitivity),
+            toolTip: "0.5 为标准灵敏度（与旧版观感一致）。向右调到 1：增强区间，小声说话也能把音柱顶满（最多约 10 倍增益）；向左调到 0.1：减弱区间，需要更大声音柱才会撑高。",
+            action: #selector(changeWaveformSensitivity(_:))
+        )
+        waveformSensitivitySlider = sensitivityRow.slider
+        waveformSensitivityValueLabel = sensitivityRow.valueLabel
+        settingsMenu.addItem(sensitivityRow.item)
 
         settingsMenu.addItem(NSMenuItem.separator())
         let emptyBufferRow = checkmarkRow(
@@ -440,6 +456,22 @@ final class DebuffStatusBarController: NSObject, NSMenuDelegate {
         guard DictationSettings.maxSegmentPresets.indices.contains(sender.tag) else { return }
         services.dictation.settings.maxSegmentSeconds = DictationSettings.maxSegmentPresets[sender.tag]
         refreshDictationItems()
+    }
+
+    /// 波形敏感度滑块：拖动中连续生效，值吸附到 0.1 步长。
+    @objc private func changeWaveformSensitivity(_ sender: NSSlider) {
+        let value = DictationSettings.clampWaveformSensitivity(sender.doubleValue)
+        sender.doubleValue = value
+        services.dictation.settings.waveformSensitivity = value
+        services.dictation.applyWaveformSensitivity()
+        waveformSensitivityValueLabel.stringValue = Self.sensitivityText(value)
+    }
+
+    private static func sensitivityText(_ value: Double) -> String {
+        if abs(value - DictationSettings.waveformSensitivityStandard) < 0.0001 {
+            return String(format: "%.1f 标准", value)
+        }
+        return String(format: "%.1f", value)
     }
 
     @objc private func toggleEmptyBufferBehavior(_ sender: NSButton) {
@@ -709,6 +741,46 @@ final class DebuffStatusBarController: NSObject, NSMenuDelegate {
         return viewRow(button: button)
     }
 
+    /// 滑块行：左侧滑动条、右侧实时显示当前值。与勾选行一样由控件消费点击，
+    /// 菜单保持展开，方便边看波形边微调。
+    private func sliderRow(
+        value: Double,
+        range: ClosedRange<Double>,
+        step: Double,
+        valueText: String,
+        toolTip: String?,
+        action: Selector
+    ) -> (item: NSMenuItem, slider: NSSlider, valueLabel: NSTextField) {
+        let width: CGFloat = 300
+        let height: CGFloat = 28
+        let slider = NSSlider(
+            value: value,
+            minValue: range.lowerBound,
+            maxValue: range.upperBound,
+            target: self,
+            action: action
+        )
+        slider.isContinuous = true
+        slider.toolTip = toolTip
+        // 每个值一档刻度，拖动时只在整档位之间取值（0.1 … 1.0）。
+        slider.numberOfTickMarks = Int(((range.upperBound - range.lowerBound) / step).rounded()) + 1
+        slider.allowsTickMarkValuesOnly = true
+        slider.frame = NSRect(x: 14, y: 2, width: 218, height: 24)
+
+        let valueLabel = NSTextField(labelWithString: valueText)
+        valueLabel.font = .menuFont(ofSize: 0)
+        valueLabel.textColor = .secondaryLabelColor
+        valueLabel.alignment = .right
+        valueLabel.frame = NSRect(x: 240, y: 5, width: 56, height: 18)
+
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: width, height: height))
+        container.addSubview(slider)
+        container.addSubview(valueLabel)
+        let item = NSMenuItem()
+        item.view = container
+        return (item, slider, valueLabel)
+    }
+
     // MARK: - 刷新（只改 title，整棵 `NSMenu` 结构不替换，子菜单不会“被拆掉”）
 
     private func refreshStatusLineItems() {
@@ -789,6 +861,8 @@ final class DebuffStatusBarController: NSObject, NSMenuDelegate {
             let selected = abs(DictationSettings.maxSegmentPresets[index] - s.maxSegmentSeconds) < 0.0001
             button.state = selected ? .on : .off
         }
+        waveformSensitivitySlider.doubleValue = s.waveformSensitivity
+        waveformSensitivityValueLabel.stringValue = Self.sensitivityText(s.waveformSensitivity)
     }
 
     private func bindData() {

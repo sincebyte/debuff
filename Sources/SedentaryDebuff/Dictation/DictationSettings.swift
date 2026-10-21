@@ -31,6 +31,12 @@ final class DictationSettings: ObservableObject {
         didSet { UserDefaults.standard.set(waveformWidth, forKey: Self.waveformWidthKey) }
     }
 
+    /// 波形敏感度（0.1…1.0）：0.5 = 标准（与旧版观感一致），0.5→1 是增强区间，
+    /// 0.5→0.1 是减弱区间。越小/越大的声音都能把音柱顶到满高，见 `waveformGainFactor`。
+    @Published var waveformSensitivity: Double {
+        didSet { UserDefaults.standard.set(waveformSensitivity, forKey: Self.waveformSensitivityKey) }
+    }
+
     /// 选中的麦克风 uid；nil = 跟随系统当前默认输入设备。仅录音期间临时生效。
     @Published var microphoneUID: String? {
         didSet {
@@ -126,6 +132,15 @@ final class DictationSettings: ObservableObject {
     static let defaultFlags: UInt32 = UInt32(cmdKey) // ⌘D
     static let pausePresets: [Double] = [1.0, 2.0, 3.0, 4.0, 5.0]
     static let maxSegmentPresets: [Double] = [30, 45, 60]
+    /// 波形敏感度的合法范围与取值步长。
+    static let waveformSensitivityRange: ClosedRange<Double> = 0.1...1.0
+    static let waveformSensitivityStep: Double = 0.1
+    /// 敏感度基准点：0.5 = 标准增益（与旧版观感一致），不是 1.0。
+    static let waveformSensitivityStandard: Double = 0.5
+    /// 敏感度 1.0 相对标准的显示增益倍率：0.5→1 就是「增强区间」。
+    static let waveformSensitivityMaxBoost: Double = 10.0
+    /// 新装默认落在标准位，保持原有观感。
+    static let defaultWaveformSensitivity: Double = waveformSensitivityStandard
 
     private static let sttURLKey = "dictation.sttURL"
     private static let hotkeyKeyCodeKey = "dictation.hotkeyKeyCode"
@@ -136,6 +151,7 @@ final class DictationSettings: ObservableObject {
     private static let maxSegmentExtendedKey = "dictation.maxSegmentExtended60"
     private static let activeOpacityKey = "dictation.activeOpacity"
     private static let waveformWidthKey = "dictation.waveform.width"
+    private static let waveformSensitivityKey = "dictation.waveform.sensitivity"
     private static let microphoneKey = "dictation.microphone.uid"
     private static let journalEnabledKey = "dictation.journal.enabled"
     private static let emptyBufferBehaviorKey = "dictation.emptyBufferBehavior"
@@ -155,6 +171,9 @@ final class DictationSettings: ObservableObject {
         maxSegmentSeconds = def.object(forKey: Self.maxSegmentKey) as? Double ?? 60.0
         activeOpacity = def.object(forKey: Self.activeOpacityKey) as? Double ?? 1.0
         waveformWidth = def.object(forKey: Self.waveformWidthKey) as? Double ?? 167.0
+        waveformSensitivity = Self.clampWaveformSensitivity(
+            def.object(forKey: Self.waveformSensitivityKey) as? Double ?? Self.defaultWaveformSensitivity
+        )
         microphoneUID = def.string(forKey: Self.microphoneKey)
         journalEnabled = def.object(forKey: Self.journalEnabledKey) as? Bool ?? true
         emptyBufferBehavior = def.string(forKey: Self.emptyBufferBehaviorKey)
@@ -199,5 +218,27 @@ final class DictationSettings: ObservableObject {
 
     private static func nearest(_ value: Double, in presets: [Double]) -> Double {
         presets.min { abs($0 - value) < abs($1 - value) } ?? value
+    }
+
+    /// 把任意输入吸附到 0.1…1.0 内、并按 0.1 步长取整。
+    static func clampWaveformSensitivity(_ value: Double) -> Double {
+        let clamped = min(
+            waveformSensitivityRange.upperBound,
+            max(waveformSensitivityRange.lowerBound, value)
+        )
+        let steps = (clamped / waveformSensitivityStep).rounded()
+        return min(
+            waveformSensitivityRange.upperBound,
+            max(waveformSensitivityRange.lowerBound, steps * waveformSensitivityStep)
+        )
+    }
+
+    /// 敏感度 → 显示增益倍率：0.5 → 1 倍（标准），1.0 → 10 倍（增强上限），
+    /// 0.1 → 约 0.16 倍。用指数曲线，让 0.5 以上越往上增强得越快。
+    static func waveformGainFactor(_ sensitivity: Double) -> Double {
+        let s = clampWaveformSensitivity(sensitivity)
+        let standardRange = waveformSensitivityRange.upperBound - waveformSensitivityStandard
+        let exponent = (s - waveformSensitivityStandard) / standardRange
+        return pow(waveformSensitivityMaxBoost, exponent)
     }
 }

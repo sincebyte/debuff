@@ -166,6 +166,11 @@ final class DictationWaveformPanel {
         viewState.activeOpacity = value
     }
 
+    /// 波形敏感度（0.1…1.0）：值越大，越小的声音也能把音柱顶高。
+    func setSensitivity(_ value: Double) {
+        viewState.sensitivity = DictationSettings.clampWaveformSensitivity(value)
+    }
+
     func setWidth(_ width: CGFloat) {
         currentWidth = min(waveformMaxWidth, max(waveformMinWidth, width))
         // 收起态只记录目标宽度，等展开时再生效，避免把 0 宽窗口撑开。
