@@ -48,8 +48,6 @@ struct DictationWaveformView: View {
     private let boardPadding: CGFloat = 4
     /// 波形条与缓冲文本区间距（与布局层一致）。
     private let bufferSpacing: CGFloat = 2
-    /// 缓冲文本滚动区高度。
-    private let bufferAreaHeight: CGFloat = 93
 
     private let timer = Timer.publish(every: 0.033, on: .main, in: .common).autoconnect()
 
@@ -57,9 +55,10 @@ struct DictationWaveformView: View {
         VStack(spacing: bufferSpacing) {
             waveformBar
                 .frame(height: barHeight)
-            if state.showsBuffer || state.keepsEmptyPlaceholder {
+            if state.showsBuffer || state.keepsEmptyPlaceholder || state.keepsExpandedHeight {
+                // 文本区高度固定（不随文字增多而增高），文字超出时在内部滚动。
                 bufferScroll
-                    .frame(height: bufferAreaHeight)
+                    .frame(maxHeight: .infinity)
                     .opacity(state.showsBuffer ? 1.0 : emptyBufferOpacity)
                     .animation(.easeInOut(duration: 0.2), value: state.showsBuffer)
             }
@@ -92,6 +91,7 @@ struct DictationWaveformView: View {
         }
         .onAppear {
             if state.showsLoading { overlayVisible = true; progress = 0 }
+            state.revealedBufferText = bufferTargetText
         }
     }
 
@@ -134,7 +134,8 @@ struct DictationWaveformView: View {
         .opacity(overlayVisible ? 0 : 1)
         .animation(nil, value: overlayVisible)
         .onReceive(timer) { _ in
-            // 每帧先更新进度/覆盖层的迟滞状态（与是否在监听无关），再决定是否需要重绘波形。
+            // 每帧先推进逐字揭示与进度/覆盖层的迟滞状态（与是否在监听无关），再决定是否需要重绘波形。
+            advanceReveal()
             updateLoadingPresentation()
             guard state.isActive || state.isListening || state.showsLoading || state.cutCountdown != nil else { return }
             tick += 1
@@ -197,19 +198,16 @@ struct DictationWaveformView: View {
         return max(0.6, total)
     }
 
-    /// 光波下方的滚动缓冲：逐段展示激活期间转写的文本，最新一句始终滚到底部。
+    /// 光波下方的滚动缓冲：逐字展示激活期间转写的文本，最新一句始终滚到底部。
     private var bufferScroll: some View {
         ScrollViewReader { proxy in
             ScrollView(.vertical, showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 3) {
-                    ForEach(Array(state.bufferLines.enumerated()), id: \.offset) { index, line in
-                        Text(line)
-                            .font(.system(size: 12))
-                            .foregroundColor(.white.opacity(0.95))
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .id(index)
-                    }
+                    Text(state.revealedBufferText)
+                        .font(.system(size: 12))
+                        .foregroundColor(.white.opacity(0.95))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .fixedSize(horizontal: false, vertical: true)
                     Color.clear
                         .frame(height: 1)
                         .id(Self.bufferBottomID)
@@ -219,15 +217,49 @@ struct DictationWaveformView: View {
                 .padding(.top, 1)
                 .padding(.bottom, 8)
             }
+            // 逐字揭示时文本每帧都在变长，这里持续跟随到底部；不用动画，避免每帧滚动排队抖动。
+            .onChange(of: state.revealedBufferText) { _ in
+                proxy.scrollTo(Self.bufferBottomID, anchor: .bottom)
+            }
+            // 清整理会整段替换文本（非追加），需要立即落到底部。
             .onChange(of: state.bufferLines) { _ in
-                withAnimation(.easeOut(duration: 0.15)) {
-                    proxy.scrollTo(Self.bufferBottomID, anchor: .bottom)
-                }
+                proxy.scrollTo(Self.bufferBottomID, anchor: .bottom)
             }
             .onAppear {
                 proxy.scrollTo(Self.bufferBottomID, anchor: .bottom)
             }
         }
+    }
+
+    /// 逐字揭示的完整目标文本（控制器把整段缓冲作为一个元素放在 bufferLines 里）。
+    private var bufferTargetText: String {
+        state.bufferLines.joined()
+    }
+
+    /// 按帧把已揭示文本追向完整文本。
+    /// - 追加（ASR 新段落落地）：逐字揭示，让文字像实时打出来一样流进文本框。
+    /// - 替换/清空（清整理结果、清空指令、提交）：一次性同步，不再逐字——逐字只服务于 ASR。
+    /// 揭示速度随积压字数自适应：正常约 30 字/秒，积压越多越快追上，避免落后说话节奏太远。
+    private func advanceReveal() {
+        let target = bufferTargetText
+        let revealed = state.revealedBufferText
+        guard target != revealed else { return }
+        guard target.hasPrefix(revealed) else {
+            // 文本被整体替换（清整理）或清空：直接落到目标，不做逐字动画。
+            state.revealedBufferText = target
+            return
+        }
+        let revealedCount = revealed.count
+        let remaining = target.count - revealedCount
+        let step: Int
+        if remaining > 90 {
+            step = 4
+        } else if remaining > 30 {
+            step = 2
+        } else {
+            step = 1
+        }
+        state.revealedBufferText = String(target.prefix(min(target.count, revealedCount + step)))
     }
 
     private static let bufferBottomID = "buffer-bottom"

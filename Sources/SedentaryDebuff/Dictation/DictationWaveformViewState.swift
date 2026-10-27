@@ -40,8 +40,14 @@ final class DictationWaveformViewState: ObservableObject {
     /// 缓冲文本：激活期间累积，提交时整段粘贴到当前光标后清空。内容为拼接后的整段文本
     /// （换行由大模型决定），通常只有一个元素，供滚动区展示与自动滚底。
     @Published var bufferLines: [String] = []
+    /// 逐字揭示后的可见文本（由视图每帧推进）：面板据此按已出现文字的行数把文本区
+    /// 从最小高度慢慢撑到最大高度。
+    @Published var revealedBufferText = ""
     /// 缓冲非空时在光波下方展开滚动文本区。
     @Published var showsBuffer = false
+    /// 本次激活期间文本区是否出现过文字：出现过之后，清空缓冲（例如说「清空」）或提交
+    /// 前清缓冲都不会让面板缩回，保持当前撑开的高度直到离开激活。
+    @Published var keepsExpandedHeight = false
     /// 缓冲为空时是否保留文本框/按钮的非激活占位（false 则收起，只留波形）。
     @Published var keepsEmptyPlaceholder = true
 }

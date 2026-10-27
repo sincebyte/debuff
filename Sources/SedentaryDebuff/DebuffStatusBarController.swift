@@ -39,6 +39,9 @@ final class DebuffStatusBarController: NSObject, NSMenuDelegate {
     private var micMenu: NSMenu!
     private var pauseValueButtons: [NSButton] = []
     private var maxSegmentValueButtons: [NSButton] = []
+    private var transcriptionModeButtons: [NSButton] = []
+    private var streamingChunkValueButtons: [NSButton] = []
+    private var panelStyleButtons: [NSButton] = []
     private var waveformSensitivitySlider: NSSlider!
     private var waveformSensitivityValueLabel: NSTextField!
 
@@ -214,7 +217,41 @@ final class DebuffStatusBarController: NSObject, NSMenuDelegate {
 
         let settingsMenu = NSMenu()
 
-        settingsMenu.addItem(subHeader("停顿判定（秒）"))
+        settingsMenu.addItem(subHeader("转写方式"))
+        transcriptionModeButtons = []
+        let modeTitles: [(DictationSettings.TranscriptionMode, String, String)] = [
+            (.whole, "整段（停顿后整段转写）", "等说完停顿后一次请求整段文本，与旧版行为完全一致。"),
+            (.streaming, "流式（边说边出字）", "说话过程中按小段持续转写，文字随说话逐步出现。需要 ASR 服务支持 /v1/audio/transcriptions/stream；切换后从下一次激活开始生效。"),
+        ]
+        for (index, entry) in modeTitles.enumerated() {
+            let row = radioRow(
+                title: entry.1,
+                isOn: s.transcriptionMode == entry.0,
+                tag: index,
+                action: #selector(selectTranscriptionMode(_:))
+            )
+            row.button.toolTip = entry.2
+            settingsMenu.addItem(row.item)
+            transcriptionModeButtons.append(row.button)
+        }
+
+        settingsMenu.addItem(subHeader("流式切片上限（秒）"))
+        streamingChunkValueButtons = []
+        for (index, v) in DictationSettings.streamingChunkPresets.enumerated() {
+            let row = radioRow(
+                title: String(format: "%.1f 秒", v),
+                isOn: abs(v - s.streamingChunkSeconds) < 0.0001,
+                tag: index,
+                action: #selector(selectStreamingChunk(_:))
+            )
+            row.button.toolTip = "只用于流式模式：越短出字越快、请求越频繁；过短容易切断词语。默认 1.2 秒。"
+            row.button.isEnabled = s.transcriptionMode == .streaming
+            settingsMenu.addItem(row.item)
+            streamingChunkValueButtons.append(row.button)
+        }
+
+        settingsMenu.addItem(NSMenuItem.separator())
+        settingsMenu.addItem(subHeader("停顿判定（秒，整段模式）"))
         pauseValueButtons = []
         for (index, v) in DictationSettings.pausePresets.enumerated() {
             let row = radioRow(
@@ -228,7 +265,7 @@ final class DebuffStatusBarController: NSObject, NSMenuDelegate {
         }
 
         settingsMenu.addItem(NSMenuItem.separator())
-        settingsMenu.addItem(subHeader("最大切段（秒）"))
+        settingsMenu.addItem(subHeader("最大切段（秒，整段模式）"))
         maxSegmentValueButtons = []
         for (index, v) in DictationSettings.maxSegmentPresets.enumerated() {
             let row = radioRow(
@@ -259,7 +296,7 @@ final class DebuffStatusBarController: NSObject, NSMenuDelegate {
         let emptyBufferRow = checkmarkRow(
             title: "空文本时保留文本框",
             isOn: s.emptyBufferBehavior == .inactive,
-            toolTip: "勾选：缓冲为空时保留文本框与按钮，以非激活（降低透明度）状态显示；不勾选：收起文本框与按钮，只保留波形。",
+            toolTip: "勾选：缓冲为空时保留文本框与按钮，以非激活（降低透明度）状态显示；不勾选：收起文本框与按钮，只保留波形。仅影响竖版玻璃风格；type4me 经典横版胶囊始终保留单行文字。",
             action: #selector(toggleEmptyBufferBehavior(_:))
         )
         emptyBufferCheckbox = emptyBufferRow.button
@@ -314,6 +351,25 @@ final class DebuffStatusBarController: NSObject, NSMenuDelegate {
 
         rootMenu.addItem(NSMenuItem(title: "测试 ASR 服务连接", action: #selector(testDictationConnection), keyEquivalent: "").apply { $0.target = self })
         rootMenu.addItem(NSMenuItem(title: "测试大语言模型连接", action: #selector(testCleanupConnection), keyEquivalent: "").apply { $0.target = self })
+
+        // 悬浮窗风格放在最外层菜单的最底部：不用进设置，一眼找到、一个动作切换。
+        rootMenu.addItem(NSMenuItem.separator())
+        let panelStyleParent = NSMenuItem(title: "悬浮窗风格", action: nil, keyEquivalent: "")
+        let panelStyleMenu = NSMenu()
+        panelStyleButtons = []
+        for (index, style) in DictationSettings.PanelStyle.allCases.enumerated() {
+            let row = radioRow(
+                title: style.displayName,
+                isOn: s.panelStyle == style,
+                tag: index,
+                action: #selector(selectPanelStyle(_:))
+            )
+            row.button.toolTip = style.toolTip
+            panelStyleMenu.addItem(row.item)
+            panelStyleButtons.append(row.button)
+        }
+        panelStyleParent.submenu = panelStyleMenu
+        rootMenu.addItem(panelStyleParent)
     }
 
     private var journalToggleTitle: String {
@@ -449,6 +505,29 @@ final class DebuffStatusBarController: NSObject, NSMenuDelegate {
     @objc private func selectPause(_ sender: NSButton) {
         guard DictationSettings.pausePresets.indices.contains(sender.tag) else { return }
         services.dictation.settings.pauseSilenceSeconds = DictationSettings.pausePresets[sender.tag]
+        refreshDictationItems()
+    }
+
+    @objc private func selectTranscriptionMode(_ sender: NSButton) {
+        let modes = DictationSettings.TranscriptionMode.allCases
+        guard modes.indices.contains(sender.tag) else { return }
+        services.dictation.settings.transcriptionMode = modes[sender.tag]
+        services.dictation.applyTranscriptionMode()
+        refreshDictationItems()
+    }
+
+    @objc private func selectStreamingChunk(_ sender: NSButton) {
+        guard DictationSettings.streamingChunkPresets.indices.contains(sender.tag) else { return }
+        services.dictation.settings.streamingChunkSeconds = DictationSettings.streamingChunkPresets[sender.tag]
+        refreshDictationItems()
+    }
+
+    /// 切换悬浮窗风格：立即替换面板外观与窗口尺寸，不打断正在进行的转写。
+    @objc private func selectPanelStyle(_ sender: NSButton) {
+        let styles = DictationSettings.PanelStyle.allCases
+        guard styles.indices.contains(sender.tag) else { return }
+        services.dictation.settings.panelStyle = styles[sender.tag]
+        services.dictation.applyPanelStyle()
         refreshDictationItems()
     }
 
@@ -856,10 +935,25 @@ final class DebuffStatusBarController: NSObject, NSMenuDelegate {
         for (index, button) in pauseValueButtons.enumerated() {
             let selected = abs(DictationSettings.pausePresets[index] - s.pauseSilenceSeconds) < 0.0001
             button.state = selected ? .on : .off
+            button.isEnabled = s.transcriptionMode == .whole
         }
         for (index, button) in maxSegmentValueButtons.enumerated() {
             let selected = abs(DictationSettings.maxSegmentPresets[index] - s.maxSegmentSeconds) < 0.0001
             button.state = selected ? .on : .off
+            button.isEnabled = s.transcriptionMode == .whole
+        }
+        let modes = DictationSettings.TranscriptionMode.allCases
+        for (index, button) in transcriptionModeButtons.enumerated() where modes.indices.contains(index) {
+            button.state = s.transcriptionMode == modes[index] ? .on : .off
+        }
+        for (index, button) in streamingChunkValueButtons.enumerated() {
+            let selected = abs(DictationSettings.streamingChunkPresets[index] - s.streamingChunkSeconds) < 0.0001
+            button.state = selected ? .on : .off
+            button.isEnabled = s.transcriptionMode == .streaming
+        }
+        let styles = DictationSettings.PanelStyle.allCases
+        for (index, button) in panelStyleButtons.enumerated() where styles.indices.contains(index) {
+            button.state = s.panelStyle == styles[index] ? .on : .off
         }
         waveformSensitivitySlider.doubleValue = s.waveformSensitivity
         waveformSensitivityValueLabel.stringValue = Self.sensitivityText(s.waveformSensitivity)

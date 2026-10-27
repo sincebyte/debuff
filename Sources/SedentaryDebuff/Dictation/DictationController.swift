@@ -19,6 +19,7 @@ final class DictationController: ObservableObject {
 
     private let recorder = DictationAudioRecorder()
     private let transcriber = DictationTranscriber()
+    private let streamingTranscriber = DictationStreamingTranscriber()
     private let cleaner = DictationCleaner()
     private let journal: VoiceJournal
     private let engineQueue = DispatchQueue(label: "dictation.engine")
@@ -29,6 +30,45 @@ final class DictationController: ObservableObject {
 
     private var segmentSamples: [Float] = []
     private var segmentStart: Date?
+
+    // MARK: 流式转写
+    /// 本次激活会话固定使用的转写方式：设置里的切换只对下一次激活生效，避免一句话
+    /// 说到一半在两种链路间切换。
+    private var sessionMode: DictationSettings.TranscriptionMode = .whole
+    /// 待发送的流式音频块（seq 递增），按入队顺序发出。
+    private var streamingSendQueue: [(seq: Int, wav: Data)] = []
+    /// 下一个要发送 / 下一个可上屏的段号。结果可能乱序返回，用段号保证拼接顺序。
+    private var streamingNextSendSeq = 0
+    private var streamingNextAppendSeq = 0
+    /// 流式代数：每次复位自增，用于丢弃 cancelAll 之后才回来的旧回调。
+    private var streamingGeneration = 0
+    /// 已发出、尚未返回的流式请求数（不超过 streamingMaxInFlight）。
+    private var streamingInFlight = 0
+    /// 已返回但还不能上屏的段（前面的段还没落地），按 seq 暂存。
+    private var streamingResults: [Int: String] = [:]
+    /// 当前正在逐字上屏的段（只有「下一个可上屏」的段才接收增量，保证文字不会跳序）。
+    private var streamingLiveText = ""
+    private var streamingLiveSeq: Int?
+    /// 本句说话峰值的慢衰估计，用于判断低能量间隙是否真的是停顿/换气。
+    private var streamingPeak: Float = 0
+    /// 当前连续低能量音频的样本数；达到阈值时从这段间隙的起点切段。
+    private var streamingQuietSamples = 0
+
+    /// 流式切片的搜索窗口（秒）：强制切段时在目标切点前后寻找能量最低点，
+    /// 尽量落在字/词间隙。
+    private static let streamingCutWindowSeconds: Double = 0.45
+    /// 流式切片的最短长度（秒），避免把气口切成一个字都不到的碎块。
+    private static let streamingMinChunkSeconds: Double = 0.7
+    /// 检测到多长的低能量间隙就立刻切段（秒）：通常落在词/句之间，出字最快。
+    private static let streamingGapSeconds: Double = 0.10
+    /// 相对本句峰值的停顿判定比例（与 DictationVAD 的 pauseDropRatio 保持一致）。
+    private static let streamingQuietRatio: Float = 0.18
+    /// 说话峰值的慢衰时间常数（秒），用于相对停顿判定。
+    private static let streamingPeakReleaseSeconds: Float = 2.5
+    /// 同时允许在途的流式请求数：1.2 秒切片下 2 个足以跟上，返回按段号排序。
+    private static let streamingMaxInFlight = 2
+    /// 切片首尾的淡入淡出时长（秒）：削掉切点处的突变，减少模型把残余尾音听成重字。
+    private static let streamingFadeSeconds: Double = 0.02
 
     private var pending = 0
     private var isFlushing = false
@@ -46,6 +86,11 @@ final class DictationController: ObservableObject {
     private var cleanupToken = 0
     /// 已请求提交：等所有在途转写（含收尾段）落地后，一次性粘贴并转非激活。
     private var commitRequested = false
+    /// ⌘D 触发提交/收尾后，后面才到达的转写只累积进缓冲等待最终粘贴，不再刷到悬浮窗；
+    /// 最终内容直接输出，省掉收尾阶段的逐字渲染。
+    private var suppressesPanelUpdates: Bool {
+        commitRequested || isFlushing
+    }
     /// 语音「发送」提交后是否补一次回车。
     private var sendAfterCommit = false
     private var awaitingPermission = false
@@ -218,7 +263,12 @@ final class DictationController: ObservableObject {
         waveformPanel.onWidthChange = { [weak self] width in
             self?.settings.waveformWidth = Double(width)
         }
+        waveformPanel.onClassicMaxWidthChange = { [weak self] width in
+            self?.settings.classicPanelWidth = Double(width)
+        }
         waveformPanel.setWidth(CGFloat(settings.waveformWidth))
+        waveformPanel.setClassicMaxWidth(CGFloat(settings.classicPanelWidth))
+        waveformPanel.setStyle(settings.panelStyle)
         startHealthTimer()
     }
 
@@ -350,6 +400,7 @@ final class DictationController: ObservableObject {
         sendAfterCommit = false
         lastError = nil
         vad.reset()
+        resetStreamingState()
         // 第三步：先切非激活态再停引擎（顺序不能反：配置变化通知看到激活态会把麦克风
         // 重新拉起来）。setState 同时负责解除系统静音、App Nap 与防熄屏声明。
         setState(.inactive)
@@ -372,6 +423,24 @@ final class DictationController: ObservableObject {
     /// 菜单调整「波形敏感度」后调用：立即按新增益重绘音柱。
     func applyWaveformSensitivity() {
         waveformPanel.setSensitivity(settings.waveformSensitivity)
+    }
+
+    /// 菜单切换「悬浮窗风格」后调用：立即换成对应视图与窗口尺寸，不打断当前转写。
+    func applyPanelStyle() {
+        waveformPanel.setClassicMaxWidth(CGFloat(settings.classicPanelWidth))
+        waveformPanel.setStyle(settings.panelStyle)
+    }
+
+    /// 菜单切换「整段 / 流式」后调用：正在收音时不打断当前会话，新方式从下一次激活生效。
+    func applyTranscriptionMode() {
+        engineQueue.async { [weak self] in
+            guard let self else { return }
+            if self.currentState == .off || self.currentState == .inactive {
+                self.sessionMode = self.settings.transcriptionMode
+                self.resetStreamingState()
+            }
+            CrashLog.write("[\(Date())] 转写方式设为 \(self.settings.transcriptionMode.rawValue)，当前会话=\(self.sessionMode.rawValue)\n")
+        }
     }
 
     /// 菜单更改「清整理」配置后调用：刷新进度条两段式融合。清整理只在提交/停止时整段执行，
@@ -459,6 +528,8 @@ final class DictationController: ObservableObject {
         usedMicWasAvailable = false
         resetCleanupBookkeeping()
         clearBuffer()
+        resetStreamingState()
+        sessionMode = settings.transcriptionMode
         generation += 1
         // 取消上一次可能仍在排队的启动重试，改用本次目标状态。
         autoBootPending = false
@@ -538,6 +609,8 @@ final class DictationController: ObservableObject {
             self.waveformPanel.setEmptyBufferBehavior(self.settings.emptyBufferBehavior)
             self.waveformPanel.setListening(true)
             self.waveformPanel.setWidth(CGFloat(self.settings.waveformWidth))
+            self.waveformPanel.setClassicMaxWidth(CGFloat(self.settings.classicPanelWidth))
+            self.waveformPanel.setStyle(self.settings.panelStyle)
             self.waveformPanel.setCleanupFused(self.cleanupReady)
             self.waveformPanel.setTranscribing(false)
             self.waveformPanel.setCleaning(false)
@@ -713,6 +786,7 @@ final class DictationController: ObservableObject {
         commitRequested = false
         sendAfterCommit = false
         resetCleanupBookkeeping()
+        resetStreamingState()
         clearBuffer()
         setState(.inactive)
         setStatus("待命（按 \(hotkeyLabel) 重新激活）")
@@ -746,6 +820,7 @@ final class DictationController: ObservableObject {
         commitRequested = false
         sendAfterCommit = false
         resetCleanupBookkeeping()
+        resetStreamingState()
         clearBuffer()
         setState(.off)
         setStatus("空闲")
@@ -778,6 +853,8 @@ final class DictationController: ObservableObject {
         sendAfterCommit = false
         resetCleanupBookkeeping()
         clearBuffer()
+        resetStreamingState()
+        sessionMode = settings.transcriptionMode
         updateCutCountdown(nil)
         setState(.off)
         requestStart()
@@ -842,6 +919,7 @@ final class DictationController: ObservableObject {
         segmentStart = nil
         vad.reset()
         resetCleanupBookkeeping()
+        resetStreamingState()
         // 取出并清空缓冲：整段文本先贴到当前光标，随后光波下方的文本区清空，
         // 避免提交后旧内容一直留在面板上。
         let text = takeBufferText()
@@ -1081,6 +1159,12 @@ final class DictationController: ObservableObject {
             segmentStart = Date()
         }
 
+        // 流式模式：不等 VAD 停顿，按小段持续切出并发送，边说边出字。
+        if sessionMode == .streaming {
+            processStreamingSamples(rms: Self.rms(samples: samples), sampleCount: samples.count)
+            return
+        }
+
         let now = Date()
         // 临近最大切段（倒计时剩 5 秒）时显示倒计时数字，提示即将强制切时间片。
         if let start = segmentStart {
@@ -1168,6 +1252,10 @@ final class DictationController: ObservableObject {
     }
 
     private func flushFinalSegment() {
+        if sessionMode == .streaming {
+            flushStreamingSamples()
+            return
+        }
         guard !segmentSamples.isEmpty else { return }
         // 停顿触发切段后，残留的收尾段通常只是尾随静音。若能量极低还发去转写，
         // 提交/发送就得白等一个 STT 网络往返（约 1 秒）才粘贴，手感发滞。
@@ -1183,6 +1271,253 @@ final class DictationController: ObservableObject {
 
     /// 收尾段判定为「静音可跳过」的峰值门限，明显低于正常说话电平。
     private static let silencePeakThreshold: Float = 0.01
+
+    // MARK: - 流式切片与增量上屏
+
+    /// 累积到切片长度后切出一小段。优先在检测到的换气/停顿处立即切，出字最快；
+    /// 连续说话没有间隙时，才在目标长度附近找能量最低的 10ms 帧强制切。
+    private func processStreamingSamples(rms: Float, sampleCount: Int) {
+        let sampleRate = recorder.sampleRate
+        guard sampleRate > 0, sampleCount > 0, !segmentSamples.isEmpty else { return }
+        let dt = Double(sampleCount) / sampleRate
+        streamingPeak = max(rms, streamingPeak * expf(-Float(dt) / Self.streamingPeakReleaseSeconds))
+        if rms < streamingPeak * Self.streamingQuietRatio {
+            streamingQuietSamples += sampleCount
+        } else {
+            streamingQuietSamples = 0
+        }
+
+        let total = segmentSamples.count
+        let duration = Double(total) / sampleRate
+        let minSamples = Int(sampleRate * Self.streamingMinChunkSeconds)
+        let quietSeconds = Double(streamingQuietSamples) / sampleRate
+        let cut: Int
+        if duration >= Self.streamingMinChunkSeconds,
+           quietSeconds >= Self.streamingGapSeconds,
+           streamingQuietSamples < total {
+            // 从这段间隙的起点切：切点前的音频正好说完一个词/句。
+            cut = total - streamingQuietSamples
+        } else {
+            let maxSamples = Int(sampleRate * settings.streamingChunkSeconds)
+            let window = Int(sampleRate * Self.streamingCutWindowSeconds)
+            guard maxSamples > 0, window > 0, total >= maxSamples + window else { return }
+            cut = streamingCutIndex(
+                hopSamples: maxSamples,
+                windowSamples: window,
+                minSamples: minSamples,
+                sampleRate: sampleRate
+            )
+        }
+        guard cut > 0 else { return }
+        let samples = Array(segmentSamples[0..<cut])
+        segmentSamples.removeFirst(cut)
+        streamingPeak = 0
+        streamingQuietSamples = 0
+        sendStreamingChunk(samples, reason: quietSeconds >= Self.streamingGapSeconds ? "停顿切片" : "切片")
+    }
+
+    /// 在 [最短切片, 切点+窗口] 内找能量最低的 10ms 帧，返回其中心作为切点。
+    private func streamingCutIndex(
+        hopSamples: Int,
+        windowSamples: Int,
+        minSamples: Int,
+        sampleRate: Double
+    ) -> Int {
+        let count = segmentSamples.count
+        let frame = max(1, Int(sampleRate * 0.01))
+        let lower = max(minSamples, hopSamples - windowSamples, 0)
+        let upper = min(count, hopSamples + windowSamples)
+        let target = min(count, hopSamples)
+        guard upper > lower else { return target }
+        var best = target
+        var bestEnergy = Float.greatestFiniteMagnitude
+        var index = lower
+        while index + frame <= upper {
+            var sum: Float = 0
+            for i in index..<(index + frame) {
+                let value = segmentSamples[i]
+                sum += value * value
+            }
+            if sum < bestEnergy {
+                bestEnergy = sum
+                best = index + frame / 2
+            }
+            index += frame
+        }
+        return best
+    }
+
+    /// 把一小段音频交给流式接口；近乎静音的块直接丢弃，省一次无意义请求。
+    private func sendStreamingChunk(_ samples: [Float], reason: String) {
+        guard !samples.isEmpty else { return }
+        let peak = samples.reduce(Float(0)) { max($0, abs($1)) }
+        guard peak >= Self.silencePeakThreshold else {
+            CrashLog.write("[\(Date())] 流式\(reason)近乎静音，跳过 samples=\(samples.count) peak=\(peak)\n")
+            return
+        }
+        let wav = WAVWriter.pcm16Data(
+            samples: Self.faded(samples, sampleRate: recorder.sampleRate),
+            sampleRate: Int(recorder.sampleRate)
+        )
+        let seq = streamingNextSendSeq
+        streamingNextSendSeq += 1
+        pending += 1
+        let audioSeconds = recorder.sampleRate > 0
+            ? Double(samples.count) / recorder.sampleRate
+            : 0
+        // 流式模式平时不盖进度条：波形要一直可见，文字本身就是进度。只有提交/停止
+        // 需要等最后几段落地时才显示一次「转译中」。
+        if commitRequested || isFlushing {
+            setTranscribing(true, estimatedDuration: Self.estimatedTranscribeSeconds(audioSeconds: audioSeconds))
+        }
+        streamingSendQueue.append((seq: seq, wav: wav))
+        CrashLog.write("[\(Date())] 流式\(reason) seq=\(seq) samples=\(samples.count) peak=\(peak)\n")
+        pumpStreamingQueue()
+    }
+
+    /// 首尾各做一小段淡入淡出，削掉切点处的波形突变。
+    private static func faded(_ samples: [Float], sampleRate: Double) -> [Float] {
+        guard sampleRate > 0, samples.count > 4 else { return samples }
+        let fade = min(Int(sampleRate * streamingFadeSeconds), samples.count / 2)
+        guard fade > 0 else { return samples }
+        var out = samples
+        for i in 0..<fade {
+            let gain = Float(i) / Float(fade)
+            out[i] *= gain
+            out[out.count - 1 - i] *= gain
+        }
+        return out
+    }
+
+    /// 在并发上限内按队列顺序发出请求；结果回来时再按段号顺序拼接。
+    private func pumpStreamingQueue() {
+        while streamingInFlight < Self.streamingMaxInFlight, !streamingSendQueue.isEmpty {
+            let item = streamingSendQueue.removeFirst()
+            streamingInFlight += 1
+            let gen = generation
+            let streamGen = streamingGeneration
+            streamingTranscriber.transcribe(
+                wavData: item.wav,
+                urlString: settings.sttURLString,
+                onDelta: { [weak self] delta in
+                    self?.engineQueue.async {
+                        self?.handleStreamingDelta(
+                            delta,
+                            seq: item.seq,
+                            generation: gen,
+                            streamGeneration: streamGen
+                        )
+                    }
+                },
+                completion: { [weak self] result in
+                    self?.engineQueue.async {
+                        self?.handleStreamingResult(
+                            result,
+                            seq: item.seq,
+                            generation: gen,
+                            streamGeneration: streamGen
+                        )
+                    }
+                }
+            )
+        }
+    }
+
+    /// 引擎逐 token 的增量：只让「下一个该上屏」的段实时显示，避免乱序跳动。
+    /// 这里只更新展示用的临时文本，不写缓冲/草稿；`final` 到达时才正式拼接。
+    private func handleStreamingDelta(
+        _ delta: String,
+        seq: Int,
+        generation gen: Int,
+        streamGeneration streamGen: Int
+    ) {
+        guard gen == generation, streamGen == streamingGeneration else { return }
+        guard seq == streamingNextAppendSeq else { return }
+        streamingLiveSeq = seq
+        streamingLiveText += delta
+        // ⌘D 之后不再把新的增量铺到悬浮窗上，最终内容直接粘贴输出。
+        if !suppressesPanelUpdates {
+            updateBufferUI()
+        }
+    }
+
+    private func handleStreamingResult(
+        _ result: Result<String, Error>,
+        seq: Int,
+        generation gen: Int,
+        streamGeneration streamGen: Int
+    ) {
+        guard gen == generation, streamGen == streamingGeneration else {
+            CrashLog.write("[\(Date())] 丢弃过期流式结果 seq=\(seq)\n")
+            return
+        }
+        guard pending > 0 else { return }
+        pending -= 1
+        streamingInFlight = max(0, streamingInFlight - 1)
+        switch result {
+        case .success(let text):
+            streamingResults[seq] = trimmedTranscribedText(text)
+        case .failure(let error):
+            CrashLog.write("[\(Date())] 流式转写失败 seq=\(seq)：\(error.localizedDescription)\n")
+            lastError = error.localizedDescription
+            setStatus("流式转写失败：\(error.localizedDescription)")
+            // 最终结果失败时保留已经逐字显示出来的增量，别让说过的字凭空消失；
+            // 提交前的清整理仍会再整理一次。
+            streamingResults[seq] = streamingLiveSeq == seq ? streamingLiveText : ""
+        }
+        drainStreamingResults()
+        if pending == 0 {
+            setTranscribing(false)
+        }
+        pumpStreamingQueue()
+        tryFinishCommit()
+        finishIfNeeded()
+    }
+
+    /// 按段号顺序把已返回的最终文本拼进缓冲；当前段的临时展示文本随之让位。
+    private func drainStreamingResults() {
+        var changed = false
+        while let text = streamingResults.removeValue(forKey: streamingNextAppendSeq) {
+            if streamingLiveSeq == streamingNextAppendSeq {
+                streamingLiveText = ""
+                streamingLiveSeq = nil
+            }
+            streamingNextAppendSeq += 1
+            changed = true
+            if !text.isEmpty {
+                handleTranscribed(text)
+            }
+        }
+        if changed, !suppressesPanelUpdates {
+            updateBufferUI()
+        }
+    }
+
+    /// 停止/提交/重建引擎前把残余音频作为最后一小段发出（静音会被自动跳过）。
+    private func flushStreamingSamples() {
+        let samples = segmentSamples
+        segmentSamples.removeAll()
+        segmentStart = nil
+        streamingPeak = 0
+        streamingQuietSamples = 0
+        guard !samples.isEmpty else { return }
+        sendStreamingChunk(samples, reason: "收尾")
+    }
+
+    /// 复位流式簿记并作废在途结果（换代 + 取消请求），用于停止/清空/重新激活。
+    private func resetStreamingState() {
+        streamingGeneration += 1
+        streamingTranscriber.cancelAll()
+        streamingSendQueue.removeAll()
+        streamingResults.removeAll()
+        streamingNextSendSeq = 0
+        streamingNextAppendSeq = 0
+        streamingInFlight = 0
+        streamingLiveText = ""
+        streamingLiveSeq = nil
+        streamingPeak = 0
+        streamingQuietSamples = 0
+    }
 
     // MARK: - 转写结果
 
@@ -1252,7 +1587,10 @@ final class DictationController: ObservableObject {
         let line = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !line.isEmpty else { return }
         bufferText += line
-        updateBufferUI()
+        // ⌘D 之后的新段只进缓冲、等最终粘贴；不再回填悬浮窗逐字渲染。
+        if !suppressesPanelUpdates {
+            updateBufferUI()
+        }
         // 每段转写落地即把当前未提交整段写入草稿：断电/崩溃/强杀后，下次启动可恢复，
         // 损失最多只有最后一段（未被转写的音频）。
         journal.updateDraft(bufferText)
@@ -1277,9 +1615,11 @@ final class DictationController: ObservableObject {
     }
 
     /// 把缓冲文本交给面板展示（整段一个元素，面板里出现的换行完全来自大模型整理结果本身，
-    /// 与提交时粘贴的内容保持一致）。
+    /// 与提交时粘贴的内容保持一致）。流式模式下把当前段尚未定稿的增量接在末尾，让文字
+    /// 随引擎解码逐步出现；定稿时用 `final` 覆盖，不会写进缓冲/草稿。
     private func updateBufferUI() {
-        let lines = bufferText.isEmpty ? [] : [bufferText]
+        let text = bufferText + streamingLiveText
+        let lines = text.isEmpty ? [] : [text]
         DispatchQueue.main.async { [weak self] in
             self?.waveformPanel.setBuffer(lines)
         }
@@ -1363,7 +1703,11 @@ final class DictationController: ObservableObject {
             CrashLog.write("[\(Date())] 清整理失败：\(error.localizedDescription)\n")
             setStatus("清整理失败，已保留原文：\(error.localizedDescription)")
         }
-        updateBufferUI()
+        // 清整理只发生在提交/停止收尾阶段，返回后紧接着就会 takeBufferText 粘贴或收起面板。
+        // 这里不再把整理后的整段文本回填到面板逐字渲染，直接走最终输出，省一次完整渲染。
+        if !suppressesPanelUpdates {
+            updateBufferUI()
+        }
         tryFinishCommit()
         finishIfNeeded()
     }
@@ -1500,6 +1844,7 @@ final class DictationController: ObservableObject {
         if !text.isEmpty { journal.commit(activeText: text) }
         isFlushing = false
         resetCleanupBookkeeping()
+        resetStreamingState()
         setState(.off)
         if let lastError {
             setStatus("完成（部分失败：\(lastError)）")
