@@ -870,10 +870,27 @@ final class DictationController: ObservableObject {
         // 用户已请求离开激活：立即放开系统静音，不必等在途转写/清整理全部落地。
         releaseSystemMute()
         commitRequested = true
-        // loading 不在这里单独触发：统一由「是否有在途转写」驱动（见 finalizeSegment /
-        // handleResult），因此 VAD 切片与收尾段都能在波形右侧显示转写进行中。
+        // 转译 loading 仍由在途转写驱动（见 finalizeSegment / handleResult）；
+        // 但「整理中」不能等 ASR 返回后才亮起，否则经典条在这段空档里看起来像卡死。
+        // 先亮整理态，再准备收尾段：WAV 封装与发起请求虽然很快，也不该挡在第一帧前面。
+        beginCleaningPresentationIfNeeded()
         flushFinalSegment()
+        // 真正的清整理仍等所有转写落地后再发起（见 tryFinishCommit）。
         tryFinishCommit()
+    }
+
+    /// 提交键按下时立刻进入「整理中」外观：此时可能还有收尾段在等 ASR。
+    /// 只影响展示，不提前发送清整理请求，避免把尚未定稿的文本交给大模型。
+    private func beginCleaningPresentationIfNeeded() {
+        guard cleanupReady else { return }
+        // 收尾音频尚未 flush 时也先把整理态亮起来；真正是否有内容由后续流程决定。
+        let hasPendingAudio = !segmentSamples.isEmpty
+        guard !bufferText.isEmpty || !streamingLiveText.isEmpty || pending > 0 || hasPendingAudio else { return }
+        let characters = max(bufferText.count, streamingLiveText.count)
+        // 还有在途 ASR 时额外预留一点时间，让进度先走起来而不是一开始就逼近满格。
+        let estimate = Self.estimatedCleanSeconds(characters: characters)
+            + (pending > 0 || hasPendingAudio ? Self.commitASRWaitAllowance : 0)
+        setCleaning(true, estimatedDuration: estimate)
     }
 
     /// 主线程更新面板的「转写进行中」loading：只要还有在途转写就显示，全部返回即消失。
@@ -904,6 +921,9 @@ final class DictationController: ObservableObject {
         let perCharacter: TimeInterval = 0.03
         return fixedOverhead + Double(max(0, characters)) * perCharacter
     }
+
+    /// 按下提交键后收尾段 ASR 通常还要一次网络往返；给「整理中」进度预留的额外时间。
+    private static let commitASRWaitAllowance: TimeInterval = 1.2
 
     /// 在途转写全部返回后执行提交（由 handleResult / handleFinalCleanupResult 在条件
     /// 满足时调用）。提交前对整段缓冲做一次清整理；若已发起请求则等其回调再来。

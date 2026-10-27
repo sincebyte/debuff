@@ -292,6 +292,8 @@ final class DictationWaveformPanel {
     /// 宽度开始随文字增长撑到最大值；手动拖过则保持用户选的宽度到本轮结束。
     private func setClassicWidthNeeded(_ needed: CGFloat) {
         guard currentStyle == .classic else { return }
+        // 清整理覆盖层期间冻结宽度：提交收尾会清空/替换缓冲，不能因此让框体缩窄。
+        guard !viewState.isCleaning else { return }
         lastClassicNeededWidth = needed
         guard classicManualWidth == nil else { return }
         applyClassicFit(needed)
@@ -299,6 +301,8 @@ final class DictationWaveformPanel {
 
     private func applyClassicFit(_ needed: CGFloat) {
         guard currentStyle == .classic else { return }
+        // 同样覆盖「设置里的最大宽度变化」等旁路，避免清整理过程中宽度被重算。
+        guard !viewState.isCleaning else { return }
         let target = min(classicMaxContentWidth, max(classicInitialWidth, needed))
         applyClassicContentWidth(target)
     }

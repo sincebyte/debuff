@@ -204,6 +204,9 @@ struct DictationClassicBarView: View {
     /// 把「当前文字完整放下需要的胶囊宽度」上报给面板。只在宽度变化超过 0.5pt 时
     /// 回调，避免逐帧重复触发布局。
     private func reportNeededWidth() {
+        // 清整理期间缓冲会被清空/替换，若继续按隐藏文字重算宽度，框体会在消失前
+        // 突然缩窄。覆盖层出现后到面板收起前一律冻结上一帧宽度。
+        guard !state.isCleaning, !showsCleaningOverlay else { return }
         let needed = DictationClassicBarMetrics.neededWidth(
             forTextWidth: Self.textWidth(displayedText)
         )
